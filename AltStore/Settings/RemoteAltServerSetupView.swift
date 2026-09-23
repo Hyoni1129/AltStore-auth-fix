@@ -32,7 +32,7 @@ extension RemoteAltServerSetupView
     {
         var plan: [Step] = [.welcome]
         
-        if Keychain.shared.devicePairingFile == nil
+        if Keychain.shared.devicePairingFile == nil && AppManager.shared.embeddedPairingFile() == nil
         {
             if #available(iOS 27, *)
             {

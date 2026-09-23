@@ -75,6 +75,13 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         if UserDefaults.standard.firstLaunch == nil
         {
             Keychain.shared.reset()
+            
+            // If AltServer provided a fresh pairing file on install, remove the one left over in the keychain.
+            if AppManager.shared.embeddedPairingFile() != nil
+            {
+                Keychain.shared.devicePairingFile = nil
+            }
+            
             UserDefaults.standard.firstLaunch = Date()
         }
         

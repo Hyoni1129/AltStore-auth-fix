@@ -621,27 +621,19 @@ private extension SettingsViewController
 
     func setUpRemoteAltServer()
     {
-        if #unavailable(iOS 27)
-        {
-            // The setup requires sign-in: pairing needs an account, and the bundled pairing file can't be decrypted without one.
-            guard self.activeTeam != nil else { return self.signIn { result in
-                if case .success = result { self.setUpRemoteAltServer() }
-            } }
-        }
-        
-        if Keychain.shared.devicePairingFile == nil,
-           !UserDefaults.shared.ignoresBundledPairingFile,
-           let pairingFile = AppManager.shared.bundledPairingFile()
-        {
-            Keychain.shared.devicePairingFile = pairingFile // Promote bundled pairing file on first setup only.
-        }
-        
         if let selectedIndexPath = self.tableView.indexPathForSelectedRow
         {
             self.tableView.deselectRow(at: selectedIndexPath, animated: true)
         }
         
         let hostingController = RemoteAltServerSetupView.makeViewController {
+            // Move the pairing file embedded at install to the keychain.
+            if let pairingFile = AppManager.shared.embeddedPairingFile()
+            {
+                Keychain.shared.devicePairingFile = pairingFile.data
+                AppManager.shared.deleteEmbeddedPairingFile()
+            }
+            
             UserDefaults.shared.prefersRemoteAltServer = true
             
             // Selects a default server and provisions adi.pb against it

@@ -212,7 +212,7 @@ private extension PairDeviceOperation
         let data = try await self.performHandshake(handle: handle, connectionFD: connectionFD)
         
         // Validate data is in correct format.
-        _ = try FetchPairingFileOperation.PairingFile(data: data)
+        _ = try PairingFile(data: data)
         
         return data
     }
