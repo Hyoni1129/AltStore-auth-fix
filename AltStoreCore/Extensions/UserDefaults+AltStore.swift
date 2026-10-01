@@ -85,6 +85,8 @@ public extension UserDefaults
     // Only true when a pairing file is configured, so this alone decides if we should use local vs. remote AltServer.
     @NSManaged var prefersRemoteAltServer: Bool
     
+    @NSManaged var isBundleIDRandomizationEnabled: Bool
+    
     class func registerDefaults()
     {
         let ios13_5 = OperatingSystemVersion(majorVersion: 13, minorVersion: 5, patchVersion: 0)
@@ -124,6 +126,7 @@ public extension UserDefaults
             #keyPath(UserDefaults.permissionCheckingDisabled): permissionCheckingDisabled,
             #keyPath(UserDefaults._preferredAppSorting): preferredAppSorting.rawValue,
             #keyPath(UserDefaults.prefersRemoteAltServer): false,
+            #keyPath(UserDefaults.isBundleIDRandomizationEnabled): false,
         ] as [String: Any]
         
         UserDefaults.standard.register(defaults: defaults)

@@ -859,6 +859,46 @@
                                     </tableViewCell>
                                 </cells>
                             </tableViewSection>
+                            <tableViewSection headerTitle="" id="BoQ-Up-6xY">
+                                <cells>
+                                    <tableViewCell clipsSubviews="YES" contentMode="scaleToFill" preservesSuperviewLayoutMargins="YES" selectionStyle="default" indentationWidth="10" rowHeight="51" id="QHs-si-zD5" customClass="InsetGroupTableViewCell" customModule="AltStore" customModuleProvider="target">
+                                        <rect key="frame" x="0.0" y="1429.5" width="375" height="51"/>
+                                        <autoresizingMask key="autoresizingMask"/>
+                                        <tableViewCellContentView key="contentView" opaque="NO" clipsSubviews="YES" multipleTouchEnabled="YES" contentMode="center" preservesSuperviewLayoutMargins="YES" insetsLayoutMarginsFromSafeArea="NO" tableViewCell="QHs-si-zD5" id="qWn-9j-lxb">
+                                            <rect key="frame" x="0.0" y="0.0" width="375" height="51"/>
+                                            <autoresizingMask key="autoresizingMask"/>
+                                            <subviews>
+                                                <label opaque="NO" userInteractionEnabled="NO" contentMode="left" horizontalHuggingPriority="251" verticalHuggingPriority="251" text="Randomize Bundle IDs" textAlignment="natural" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" translatesAutoresizingMaskIntoConstraints="NO" id="ULm-oK-Ems">
+                                                    <rect key="frame" x="30" y="15.5" width="182" height="20.5"/>
+                                                    <fontDescription key="fontDescription" type="boldSystem" pointSize="17"/>
+                                                    <color key="textColor" white="1" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
+                                                    <nil key="highlightedColor"/>
+                                                </label>
+                                                <switch opaque="NO" contentMode="scaleToFill" horizontalHuggingPriority="750" verticalHuggingPriority="750" contentHorizontalAlignment="center" contentVerticalAlignment="center" on="YES" translatesAutoresizingMaskIntoConstraints="NO" id="zFA-DJ-2wI">
+                                                    <rect key="frame" x="284" y="11.5" width="63" height="28"/>
+                                                    <connections>
+                                                        <action selector="toggleIsBundleIDRandomizationEnabled:" destination="aMk-Xp-UL8" eventType="valueChanged" id="VkG-tk-Fxh"/>
+                                                    </connections>
+                                                </switch>
+                                            </subviews>
+                                            <constraints>
+                                                <constraint firstAttribute="trailingMargin" secondItem="zFA-DJ-2wI" secondAttribute="trailing" id="E6c-sY-fnM"/>
+                                                <constraint firstItem="ULm-oK-Ems" firstAttribute="centerY" secondItem="qWn-9j-lxb" secondAttribute="centerY" id="Fbs-xj-LER"/>
+                                                <constraint firstItem="ULm-oK-Ems" firstAttribute="leading" secondItem="qWn-9j-lxb" secondAttribute="leadingMargin" id="SRY-he-brD"/>
+                                                <constraint firstItem="zFA-DJ-2wI" firstAttribute="centerY" secondItem="qWn-9j-lxb" secondAttribute="centerY" id="elX-JE-spE"/>
+                                            </constraints>
+                                        </tableViewCellContentView>
+                                        <color key="backgroundColor" white="1" alpha="0.14999999999999999" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
+                                        <edgeInsets key="layoutMargins" top="8" left="30" bottom="8" right="30"/>
+                                        <userDefinedRuntimeAttributes>
+                                            <userDefinedRuntimeAttribute type="number" keyPath="style">
+                                                <integer key="value" value="0"/>
+                                            </userDefinedRuntimeAttribute>
+                                            <userDefinedRuntimeAttribute type="boolean" keyPath="isSelectable" value="NO"/>
+                                        </userDefinedRuntimeAttributes>
+                                    </tableViewCell>
+                                </cells>
+                            </tableViewSection>
                             <tableViewSection headerTitle="" id="OMa-EK-hRI">
                                 <cells>
                                     <tableViewCell clipsSubviews="YES" contentMode="scaleToFill" preservesSuperviewLayoutMargins="YES" selectionStyle="default" indentationWidth="10" rowHeight="51" id="FMZ-as-Ljo" customClass="InsetGroupTableViewCell" customModule="AltStore" customModuleProvider="target">
@@ -987,6 +1027,7 @@
                         <outlet property="githubButton" destination="oqj-4S-I9l" id="sxB-LE-gA2"/>
                         <outlet property="mastodonButton" destination="B8Q-e7-beR" id="Kbe-Og-rsg"/>
                         <outlet property="prefersRemoteAltServerSwitch" destination="RYK-fp-zet" id="Drr-ru-nLG"/>
+                        <outlet property="randomizeBundleIDsSwitch" destination="zFA-DJ-2wI" id="UkI-Jx-8WE"/>
                         <outlet property="remoteAltServerLabel" destination="ANS-L1-001" id="lcf-r2-4Ed"/>
                         <outlet property="serverURLLabel" destination="ANS-L2-001" id="Caro-SrL-001"/>
                         <outlet property="threadsButton" destination="AWk-yE-9LI" id="SOc-ei-4gK"/>
