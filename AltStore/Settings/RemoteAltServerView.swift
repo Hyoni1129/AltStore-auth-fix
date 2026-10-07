@@ -239,8 +239,8 @@ private extension RemoteAltServerView
     func clearRemoteAltServer()
     {
         UserDefaults.shared.prefersRemoteAltServer = false
-        UserDefaults.shared.ignoresBundledPairingFile = true
         Keychain.shared.devicePairingFile = nil
+        AppManager.shared.deleteEmbeddedPairingFile()
         
         UserDefaults.shared.preferredAnisetteServerURL = nil
         Keychain.shared.anisetteADIPB = nil
