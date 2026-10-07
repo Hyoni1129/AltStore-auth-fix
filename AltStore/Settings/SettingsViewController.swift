@@ -28,9 +28,9 @@ extension SettingsViewController
         case remoteAltServer
         case codeSigning
         case techyThings
+        case experimental
         case credits
         case macDirtyCow
-        case experimental
         case debug
     }
     
