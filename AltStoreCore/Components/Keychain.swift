@@ -87,6 +87,9 @@ public class Keychain
 
     @KeychainItem(key: "anisetteADIPB", synchronizable: false)
     public var anisetteADIPB: Data?
+    
+    @KeychainItem(key: "anisetteProvisioningClientInfo", synchronizable: false)
+    public var anisetteProvisioningClientInfo: String?
 
     @KeychainItem(key: "devicePairingFile", synchronizable: false)
     public var devicePairingFile: Data?

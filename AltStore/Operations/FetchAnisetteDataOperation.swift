@@ -47,7 +47,10 @@ extension FetchAnisetteDataOperation
 class FetchAnisetteDataOperation: ResultOperation<ALTAnisetteData>, @unchecked Sendable
 {
     let context: OperationContext
-    
+
+    // Set to Apple's X-Apple-I-MD-DATA to resynchronize the existing anisette data instead of fetching it normally.
+    var resynchronizationData: String?
+
     private let session: URLSession
     
     init(context: OperationContext)
@@ -83,8 +86,15 @@ class FetchAnisetteDataOperation: ResultOperation<ALTAnisetteData>, @unchecked S
 
                 let anisetteData: ALTAnisetteData
 
+                // Only the server that provisioned the adi.pb can resynchronize it, so go straight back to it.
+                if let sim = self.resynchronizationData
+                {
+                    guard let serverURL = UserDefaults.shared.preferredAnisetteServerURL else { throw AnisetteServerError.unavailable() }
+
+                    anisetteData = try await self.fetchAnisetteData(from: serverURL, resynchronizing: sim)
+                }
                 // Use Remote AltServer when set up and preferred.
-                if UserDefaults.shared.prefersRemoteAltServer
+                else if UserDefaults.shared.prefersRemoteAltServer
                 {
                     // AltServerless route
                     anisetteData = try await self.fetchAnisetteDataFromAvailableServer()
@@ -221,7 +231,7 @@ private extension FetchAnisetteDataOperation
     }
     
     // Based on SideStore's FetchAnisetteDataOperation: https://github.com/SideStore/SideStore/blob/develop/AltStore/Operations/FetchAnisetteDataOperation.swift
-    func fetchAnisetteData(from serverURL: URL) async throws -> ALTAnisetteData
+    func fetchAnisetteData(from serverURL: URL, resynchronizing sim: String? = nil) async throws -> ALTAnisetteData
     {
         // 1. Fetch client_info from the server
         let clientInfoURL = serverURL.appending(components: "v3", "client_info")
@@ -236,36 +246,40 @@ private extension FetchAnisetteDataOperation
         decoder.keyDecodingStrategy = .convertFromSnakeCase
         
         let response: Response = try await self.send(URLRequest(url: clientInfoURL), decoder: decoder, anisetteServerURL: serverURL)
-
-        // 2. Load or generate the persisted device identity (16 random bytes -> derives identifier, localUserID, deviceID)
+        
+        // 2. Provision against this server unless we have a cached anisette identifier + adi.pb with the same client info.
+        // A cached adi.pb from a different anisette implementation is no longer accepted, so discard it when the client info changes.
         let identity: AnisetteIdentity
-        if let id = Keychain.shared.anisetteIdentityKey
+        let adiPB: Data
+        if let id = Keychain.shared.anisetteIdentityKey, let pb = Keychain.shared.anisetteADIPB, Keychain.shared.anisetteProvisioningClientInfo == response.clientInfo
         {
             identity = AnisetteIdentity(bytes: id)
-        }
-        else
-        {
-            identity = AnisetteIdentity.make()
-            Keychain.shared.anisetteIdentityKey = identity.bytes
-        }
-
-        // 3. Provision against this server if we don't have a cached adi.pb
-        let adiPB: Data
-        if let pb = Keychain.shared.anisetteADIPB
-        {
             adiPB = pb
         }
         else
         {
-            Logger.sideload.notice("No cached adi.pb; running anisette provisioning against \(serverURL.absoluteString, privacy: .public).")
-            adiPB = try await self.provision(against: serverURL, clientInfo: response.clientInfo, userAgent: response.userAgent, identity: identity)
-            Keychain.shared.anisetteADIPB = adiPB
-        }
-        
-        // 4. Fetch anisette headers
-        let (machineID, oneTimePassword, routingInfo) = try await self.fetchHeaders(from: serverURL, identity: identity, adiPB: adiPB)
+            // A resynchronization only makes sense for the adi.pb Apple just rejected, so never provision a new one here.
+            guard sim == nil else { throw AnisetteServerError.invalidResponse(serverURL: serverURL) }
 
-        // 5. Construct & return ALTAnisetteData
+            Logger.sideload.notice("No up-to-date cached adi.pb; running anisette provisioning against \(serverURL.absoluteString, privacy: .public).")
+            
+            identity = AnisetteIdentity.make()
+            adiPB = try await self.provision(against: serverURL, clientInfo: response.clientInfo, userAgent: response.userAgent, identity: identity)
+            
+            Keychain.shared.anisetteIdentityKey = identity.bytes
+            Keychain.shared.anisetteADIPB = adiPB
+            Keychain.shared.anisetteProvisioningClientInfo = response.clientInfo
+        }
+
+        // 3. Fetch anisette headers
+        if sim != nil
+        {
+            Logger.sideload.notice("Resynchronizing anisette data against \(serverURL.absoluteString, privacy: .public).")
+        }
+
+        let (machineID, oneTimePassword, routingInfo) = try await self.fetchHeaders(from: serverURL, identity: identity, adiPB: adiPB, sim: sim)
+
+        // 4. Construct & return ALTAnisetteData
         return ALTAnisetteData(
             machineID: machineID,
             oneTimePassword: oneTimePassword,
@@ -280,7 +294,7 @@ private extension FetchAnisetteDataOperation
         )
     }
 
-    func fetchHeaders(from serverURL: URL, identity: AnisetteIdentity, adiPB: Data) async throws -> (machineID: String, oneTimePassword: String, routingInfo: UInt64)
+    func fetchHeaders(from serverURL: URL, identity: AnisetteIdentity, adiPB: Data, sim: String? = nil) async throws -> (machineID: String, oneTimePassword: String, routingInfo: UInt64)
     {
         let headersURL = serverURL.appending(components: "v3", "get_headers")
 
@@ -292,9 +306,17 @@ private extension FetchAnisetteDataOperation
         {
             var identifier: String
             var adi_pb: String
+            // Only sent when resynchronizing, so the server knows which identity to synchronize.
+            var sim: String?
+            var device_id: String?
+            var md_lu: String?
         }
 
-        let body = Body(identifier: identity.identifier, adi_pb: String(decoding: adiPB, as: UTF8.self))
+        let body = Body(identifier: identity.identifier,
+                        adi_pb: String(decoding: adiPB, as: UTF8.self),
+                        sim: sim,
+                        device_id: sim == nil ? nil : identity.deviceID,
+                        md_lu: sim == nil ? nil : identity.localUserID)
         request.httpBody = try JSONEncoder().encode(body)
 
         struct Response: Decodable

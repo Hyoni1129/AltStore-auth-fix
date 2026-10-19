@@ -386,6 +386,24 @@ private extension AuthenticationOperation
     {
         self.appleIDEmailAddress = appleID
         
+        // Apple can ask for the anisette data to be resynchronized partway through signing in (hsc 434),
+        // which only the anisette server that provisioned it can do.
+        ALTAppleAPI.shared.anisetteDataResyncHandler = { [weak self] (sim, completionHandler) in
+            guard let self else { return completionHandler(nil, OperationError.unknown()) }
+
+            let resyncOperation = FetchAnisetteDataOperation(context: self.context)
+            resyncOperation.resynchronizationData = sim
+            resyncOperation.resultHandler = { (result) in
+                switch result
+                {
+                case .failure(let error): completionHandler(nil, error)
+                case .success(let anisetteData): completionHandler(anisetteData, nil)
+                }
+            }
+
+            self.operationQueue.addOperation(resyncOperation)
+        }
+
         let fetchAnisetteDataOperation = FetchAnisetteDataOperation(context: self.context)
         fetchAnisetteDataOperation.resultHandler = { (result) in
             switch result
@@ -437,7 +455,7 @@ private extension AuthenticationOperation
                     // No view controller to present security code alert, so don't provide verificationHandler.
                     verificationHandler = nil
                 }
-                    
+                
                 ALTAppleAPI.shared.authenticate(appleID: appleID, password: password, anisetteData: anisetteData,
                                                 verificationHandler: verificationHandler) { (account, session, error) in
                     if let account = account, let session = session
