@@ -86,6 +86,16 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
             
             UserDefaults.standard.firstLaunch = Date()
         }
+                
+        if UserDefaults.shared.didResetAnisetteServer == nil
+        {
+            Keychain.shared.anisetteIdentityKey = nil
+            Keychain.shared.anisetteADIPB = nil
+            Keychain.shared.anisetteProvisioningClientInfo = nil
+            
+            UserDefaults.shared.preferredAnisetteServerURL = nil
+            UserDefaults.shared.didResetAnisetteServer = .now
+        }
         
         UserDefaults.standard.preferredServerID = Bundle.main.object(forInfoDictionaryKey: Bundle.Info.serverID) as? String
         

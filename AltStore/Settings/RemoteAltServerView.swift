@@ -188,7 +188,7 @@ private extension RemoteAltServerView
             isShowingError = true
             return
         }
-
+        
         UserDefaults.shared.preferredAnisetteServerURL = url
         preferredURL = url
 
