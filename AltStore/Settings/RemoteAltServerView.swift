@@ -189,6 +189,11 @@ private extension RemoteAltServerView
             return
         }
         
+        // Reset cached ADI.pb so we re-generate it upon next connection to server.
+        Keychain.shared.anisetteADIPB = nil
+        Keychain.shared.anisetteIdentityKey = nil
+        Keychain.shared.anisetteProvisioningClientInfo = nil
+        
         UserDefaults.shared.preferredAnisetteServerURL = url
         preferredURL = url
 
