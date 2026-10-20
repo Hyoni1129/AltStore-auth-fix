@@ -244,6 +244,8 @@ private extension RemoteAltServerView
         
         UserDefaults.shared.preferredAnisetteServerURL = nil
         Keychain.shared.anisetteADIPB = nil
+        Keychain.shared.anisetteIdentityKey = nil
+        Keychain.shared.anisetteProvisioningClientInfo = nil
         
         dismiss() // Return to Settings
     }
