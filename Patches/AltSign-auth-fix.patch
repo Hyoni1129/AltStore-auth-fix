@@ -72,23 +72,35 @@ index 3495fbf..e253b5b 100644
          {
              completionHandler(nil, error);
 diff --git a/AltSign/Apple API/ALTAppleAPISession.h b/AltSign/Apple API/ALTAppleAPISession.h
-index c718519..5818673 100644
+index c718519..76e6e93 100644
 --- a/AltSign/Apple API/ALTAppleAPISession.h	
 +++ b/AltSign/Apple API/ALTAppleAPISession.h	
-@@ -17,6 +17,7 @@ NS_ASSUME_NONNULL_BEGIN
+@@ -17,8 +17,10 @@ NS_ASSUME_NONNULL_BEGIN
  @property (nonatomic, copy) NSString *dsid;
  @property (nonatomic, copy) NSString *authToken;
  @property (nonatomic, copy) ALTAnisetteData *anisetteData;
 +@property (nonatomic, copy, nullable) NSDate *expirationDate;
  
  - (instancetype)initWithDSID:(NSString *)dsid authToken:(NSString *)authToken anisetteData:(ALTAnisetteData *)anisetteData;
++- (instancetype)initWithSession:(ALTAppleAPISession *)session;
+ 
+ @end
  
 diff --git a/AltSign/Apple API/ALTAppleAPISession.m b/AltSign/Apple API/ALTAppleAPISession.m
-index ffa5636..36f640c 100644
+index ffa5636..c2f3d90 100644
 --- a/AltSign/Apple API/ALTAppleAPISession.m	
 +++ b/AltSign/Apple API/ALTAppleAPISession.m	
-@@ -29,7 +29,7 @@
+@@ -27,9 +27,16 @@
  
+ #pragma mark - NSObject -
+ 
++- (instancetype)initWithSession:(ALTAppleAPISession *)session
++{
++    self = [self initWithDSID:session.dsid authToken:session.authToken anisetteData:session.anisetteData];
++    if (self) { _expirationDate = [session.expirationDate copy]; }
++    return self;
++}
++
  - (NSString *)description
  {
 -    return [NSString stringWithFormat:@"<%@: %p, DSID: %@, Auth Token: %@, Anisette Data: %@>", NSStringFromClass([self class]), self, self.dsid, self.authToken, self.anisetteData];

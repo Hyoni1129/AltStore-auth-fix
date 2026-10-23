@@ -1630,7 +1630,7 @@ private extension AppManager
             switch result
             {
             case .failure(let error): context.error = error
-            case .success(let anisetteData): group.context.session?.anisetteData = anisetteData
+            case .success(let anisetteData): context.session?.anisetteData = anisetteData
             }
         }
         refreshAnisetteDataOperation.addDependency(patchAppOperation)

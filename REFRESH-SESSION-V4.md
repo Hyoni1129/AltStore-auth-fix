@@ -30,6 +30,8 @@ recently issued developer token remained valid.
 - Clear the cache on sign-out, fence in-flight work with a revision, and invalidate
   rejected sessions for the next operation without replaying provisioning changes.
 - Protect concurrently collected extension profiles and preserve the first error.
+- Give each app operation an independent session copy so refreshing one app's
+  anisette data cannot change another app's profile requests.
 - Redact the developer-session object description.
 
 ## Validation scope

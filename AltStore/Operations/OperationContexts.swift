@@ -91,6 +91,8 @@ class AppOperationContext
 {
     let bundleIdentifier: String
     let authenticatedContext: AuthenticatedOperationContext
+    // Each app may refresh its anisette data independently while another app fetches profiles.
+    var session: ALTAppleAPISession?
     
     var app: ALTApplication?
     var provisioningProfiles: [String: ALTProvisioningProfile]?
@@ -118,6 +120,7 @@ class AppOperationContext
     {
         self.bundleIdentifier = bundleIdentifier
         self.authenticatedContext = authenticatedContext
+        self.session = authenticatedContext.session.map { ALTAppleAPISession(session: $0) }
     }
     
     subscript<T>(dynamicMember keyPath: WritableKeyPath<AuthenticatedOperationContext, T>) -> T

@@ -22,7 +22,9 @@ assert 'allowsCachedSession: true' in operation[operation.index('if let appleID 
 assert 'allowsCachedSession' not in operation[operation.index('authenticationViewController.authenticationHandler'):operation.index('authenticationViewController.completionHandler')]
 assert operation.count('authenticationAPI = self.appleAPI') == 3
 assert 'ALTAppleAPI.shared' not in operation
-assert 'self.invalidateAuthenticationSession()' in (ROOT / 'AltStoreCore/Components/Keychain.swift').read_text()
+assert 'authenticationRevision &+= 1' in (ROOT / 'AltStoreCore/Components/Keychain.swift').read_text()
+assert 'ALTAppleAPISession(session: $0)' in (ROOT / 'AltStore/Operations/OperationContexts.swift').read_text()
+assert 'case .success(let anisetteData): context.session?.anisetteData = anisetteData' in (ROOT / 'AltStore/Managing Apps/AppManager.swift').read_text()
 
 prelude = r'''
 import Foundation
@@ -55,6 +57,7 @@ final class ALTAppleAPISession {
 }
 final class Keychain {
     static let shared = Keychain()
+    var appleIDEmailAddress: String? = "fixture@example.invalid"
     private let lock = NSLock()
     private var data: Data?
     private var revision: UInt64 = 0
@@ -256,6 +259,20 @@ do {
     check(Keychain.shared.cachedAuthenticationSession() == nil, "Rejected old token is removed even if new login fails")
 }
 let now = Date()
+Keychain.shared.appleIDEmailAddress = nil
+do {
+    let operation = AuthenticationOperation()
+    check(!success(resolve(operation)) && operation.appleAPI.loginCalls == 0, "A removed saved account cannot be silently reactivated")
+}
+Keychain.shared.appleIDEmailAddress = account
+for missing in [false, true] {
+    Keychain.shared.reset(); seed()
+    let operation = AuthenticationOperation()
+    if missing { operation.appleAPI.freshData = nil; operation.appleAPI.freshError = URLError(.notConnectedToInternet) }
+    else { operation.appleAPI.freshData = ALTAnisetteData(deviceUniqueIdentifier: "changed-device", deviceDescription: "fixture-client", generation: 10) }
+    check(!success(resolve(operation)), "Missing or changed anisette data stops cache validation")
+    check(operation.appleAPI.validationCalls == 0 && operation.appleAPI.loginCalls == 0, "Never send stale or mismatched queued anisette data")
+}
 check(record(expiry: nil, issued: now).expiresAt == now.addingTimeInterval(900), "Missing expiry has a short local lifetime")
 check(record(expiry: now.addingTimeInterval(30 * 86400), issued: now).expiresAt == now.addingTimeInterval(7 * 86400), "Local lifetime is capped")
 check(!record().description.contains("secret") && !record().debugDescription.contains("secret"), "Record descriptions redact tokens")
@@ -302,4 +319,47 @@ with tempfile.TemporaryDirectory(prefix='altstore-refresh-tests-') as directory:
     executable = Path(directory) / 'refresh-tests'
     production = ROOT / 'Dependencies/AltSign/AltSign/Sources/AuthenticationSessionReuse.swift'
     subprocess.run(['swiftc', '-swift-version', '5', str(production), str(main), '-o', str(executable)], check=True)
+    subprocess.run([str(executable)], check=True)
+    # Compile the actual Objective-C session implementation to check per-app isolation.
+    directory = Path(directory)
+    (directory / 'ALTAccount.h').write_text('#import <Foundation/Foundation.h>\n')
+    (directory / 'ALTAnisetteData.h').write_text('''#import <Foundation/Foundation.h>
+@interface ALTAnisetteData : NSObject <NSCopying>
+@property (nonatomic, copy) NSString *oneTimePassword;
+@end
+''')
+    (directory / 'main.m').write_text(r'''
+#import <Foundation/Foundation.h>
+#import "ALTAppleAPISession.h"
+#import "ALTAnisetteData.h"
+@implementation ALTAnisetteData
+- (id)copyWithZone:(NSZone *)zone {
+    ALTAnisetteData *copy = [ALTAnisetteData new]; copy.oneTimePassword = self.oneTimePassword; return copy;
+}
+@end
+int main(void) {
+    @autoreleasepool {
+        ALTAnisetteData *initial = [ALTAnisetteData new]; initial.oneTimePassword = @"fixture-old";
+        ALTAppleAPISession *parent = [[ALTAppleAPISession alloc] initWithDSID:@"fixture-dsid" authToken:@"fixture-token-secret" anisetteData:initial];
+        parent.expirationDate = [NSDate dateWithTimeIntervalSince1970:2000000000];
+        ALTAppleAPISession *first = [[ALTAppleAPISession alloc] initWithSession:parent];
+        ALTAppleAPISession *second = [[ALTAppleAPISession alloc] initWithSession:parent];
+        NSCAssert(first != parent && second != first, @"Independent session objects");
+        NSCAssert(first.anisetteData != parent.anisetteData, @"Independent anisette objects");
+        NSCAssert([first.authToken isEqual:parent.authToken], @"Token preserved");
+        NSCAssert([first.expirationDate isEqual:parent.expirationDate], @"Expiry preserved");
+        first.anisetteData.oneTimePassword = @"fixture-new";
+        NSCAssert([parent.anisetteData.oneTimePassword isEqual:@"fixture-old"], @"First app cannot mutate shared context");
+        NSCAssert([second.anisetteData.oneTimePassword isEqual:@"fixture-old"], @"First app cannot mutate second app");
+        NSCAssert(![parent.description containsString:@"fixture-token-secret"], @"Description redacts token");
+        NSCAssert(![parent.description containsString:@"fixture-old"], @"Description redacts anisette");
+        puts("PASS: 8 offline Objective-C session isolation assertions; no credentials or network");
+    }
+}
+''')
+    api_directory = ROOT / 'Dependencies/AltSign/AltSign/Apple API'
+    executable = directory / 'session-tests'
+    subprocess.run(['clang', '-fobjc-arc', '-fmodules', '-framework', 'Foundation',
+                    '-I', str(directory), '-I', str(api_directory), str(api_directory / 'ALTAppleAPISession.m'),
+                    str(directory / 'main.m'), '-o', str(executable)], check=True)
     subprocess.run([str(executable)], check=True)

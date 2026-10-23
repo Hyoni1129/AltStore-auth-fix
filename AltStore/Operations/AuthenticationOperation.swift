@@ -523,7 +523,10 @@ private extension AuthenticationOperation
         Self.sessionCoordinator.resolve(scope: scope, allowsCachedSession: allowsCachedSession,
             load: { Keychain.shared.cachedAuthenticationSession() },
             persist: { Keychain.shared.storeAuthenticationSession($0, revision: revision) },
-            isCurrent: { Keychain.shared.authenticationSessionRevision() == revision && !self.isCancelled },
+            isCurrent: {
+                Keychain.shared.authenticationSessionRevision() == revision && !self.isCancelled &&
+                (!allowsCachedSession || Keychain.shared.appleIDEmailAddress?.lowercased() == appleID.lowercased())
+            },
             isInvalidSession: ALTAppleAPI.isAuthenticationSessionInvalid,
             validate: { saved, completion in
                 freshAnisette { result in

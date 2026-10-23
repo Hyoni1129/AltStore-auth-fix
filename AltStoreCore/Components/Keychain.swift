@@ -133,7 +133,10 @@ public class Keychain
     
     public func reset()
     {
-        self.invalidateAuthenticationSession()
+        authenticationSessionLock.lock()
+        defer { authenticationSessionLock.unlock() }
+        authenticationRevision &+= 1
+        authenticationKeychain[data: "session"] = nil
         self.appleIDEmailAddress = nil
         self.appleIDPassword = nil
         self.signingCertificatePrivateKey = nil
