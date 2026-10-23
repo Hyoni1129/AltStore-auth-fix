@@ -11,6 +11,7 @@ fi
 
 # Exercise actual patched function bodies with an offline transport before compiling the app.
 python3 Scripts/test_auth_flow.py
+python3 Scripts/test_auth_transport.py
 
 # Never embed an actual user's UDID, account, pairing file, or signing certificate in CI.
 python3 - <<'PY'
@@ -22,7 +23,7 @@ with path.open('rb') as stream:
 info.pop('ALTDeviceID', None)
 info.pop('ALTServerID', None)
 info['CFBundleDisplayName'] = 'AltStore Auth Test'
-info['CFBundleVersion'] = '6902'
+info['CFBundleVersion'] = '6903'
 with path.open('wb') as stream:
     plistlib.dump(info, stream, sort_keys=False)
 PY
@@ -37,7 +38,7 @@ xcodebuild build \
   -derivedDataPath build/DerivedData \
   CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
   CODE_SIGN_IDENTITY='' DEVELOPMENT_TEAM='' \
-  CURRENT_PROJECT_VERSION=6902 \
+  CURRENT_PROJECT_VERSION=6903 \
   ENABLE_USER_SCRIPT_SANDBOXING=NO \
   OTHER_CFLAGS='$(inherited) -Wno-error=implicit-int-conversion-on-negation' \
   2>&1 | tee build-auth.log

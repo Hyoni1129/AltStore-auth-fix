@@ -14,7 +14,7 @@ index 8413918..908e463 100644
  // value it returned. The handler should resynchronize the anisette provider and return fresh anisette data.
  @property (nonatomic, copy, nullable) void (^anisetteDataResyncHandler)(NSString *sim, void (^completionHandler)(ALTAnisetteData *_Nullable anisetteData, NSError *_Nullable error));
 diff --git a/AltSign/Sources/ALTAppleAPI+Authentication.swift b/AltSign/Sources/ALTAppleAPI+Authentication.swift
-index 7c04190..85c496b 100644
+index 7c04190..54c9931 100644
 --- a/AltSign/Sources/ALTAppleAPI+Authentication.swift
 +++ b/AltSign/Sources/ALTAppleAPI+Authentication.swift
 @@ -323,6 +323,8 @@ private extension ALTAppleAPI
@@ -235,7 +235,7 @@ index 7c04190..85c496b 100644
      func fetchAccount(session: ALTAppleAPISession, completionHandler: @escaping (Result<ALTAccount, Error>) -> Void)
      {
          let url = URL(string: "viewDeveloper.action", relativeTo: self.baseURL)!
-@@ -518,6 +552,29 @@ private extension ALTAppleAPI
+@@ -518,11 +552,44 @@ private extension ALTAppleAPI
  
  private extension ALTAppleAPI
  {
@@ -265,7 +265,22 @@ index 7c04190..85c496b 100644
      // GrandSlam rejects requests whose User-Agent and X-MMe-Client-Info don't match the client that generated the anisette data.
      var userAgent: String { self.authenticationUserAgent ?? "akd/1.0 CFNetwork/808.1.4" }
      
-@@ -536,11 +593,7 @@ private extension ALTAppleAPI
+     func sendGSARequest(_ request: URLRequest, completionHandler: @escaping (Result<(Data, HTTPURLResponse), Error>) -> Void)
+     {
++        if request.url == AppleAuthenticationHTTP.endpoint
++        {
++            AppleAuthenticationTransport.send(request) { result in
++                if case .success((_, let response)) = result {
++                    NSLog("AltStoreAuth stage=%@ status=%ld transport=http1-isolated", self.authenticationStage(for: request), response.statusCode)
++                }
++                completionHandler(result)
++            }
++            return
++        }
+         // Create a new session, and limit the maximum connections to just one at a time.
+         // Otherwise, Apple's servers may reject connections with more than 2 requests.
+         let configuration = URLSessionConfiguration.ephemeral
+@@ -536,11 +603,7 @@ private extension ALTAppleAPI
              {
                  guard let data = data, let httpResponse = response as? HTTPURLResponse else { throw error ?? ALTAppleAPIError.unknown() }
                  
@@ -278,7 +293,7 @@ index 7c04190..85c496b 100644
                  
                  completionHandler(.success((data, httpResponse)))
              }
-@@ -587,7 +640,11 @@ private extension ALTAppleAPI
+@@ -587,7 +650,11 @@ private extension ALTAppleAPI
                      let (data, httpResponse) = try result.get()
                      
                      // GSA answers rejected clients with an HTML error page (e.g. 503), which would otherwise surface as a plist parsing error.
@@ -291,3 +306,266 @@ index 7c04190..85c496b 100644
                      
                      guard let responseDictionary = try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
                            let dictionary = responseDictionary["Response"] as? [String: Any],
+diff --git a/AltSign/Sources/AppleAuthenticationTransport.swift b/AltSign/Sources/AppleAuthenticationTransport.swift
+new file mode 100644
+index 0000000..fb62333
+--- /dev/null
++++ b/AltSign/Sources/AppleAuthenticationTransport.swift
+@@ -0,0 +1,257 @@
++// A single GrandSlam request per physical TLS connection. No HTTP/2 or connection pool.
++// Only the fixed Apple sign-in endpoint uses this transport; SMS remains on its v2 path.
++import Foundation
++import Network
++import Security
++
++enum AppleAuthenticationTransportError: LocalizedError {
++    case invalidRequest, invalidResponse, responseTooLarge, incompleteResponse, timedOut
++    var errorDescription: String? {
++        switch self {
++        case .invalidRequest: return "Invalid Apple sign-in request (isolated HTTP/1.1)."
++        case .invalidResponse: return "Invalid Apple sign-in response (isolated HTTP/1.1)."
++        case .responseTooLarge: return "Apple sign-in response exceeded its size limit."
++        case .incompleteResponse: return "Apple closed the sign-in connection before its response was complete."
++        case .timedOut: return "Apple sign-in connection timed out after 30 seconds."
++        }
++    }
++}
++
++// Bounded HTTP/1 response framing, independent of the network so fragmented input can be tested.
++// Reject ambiguous framing, compression, upgrades and redirects (the caller reports HTTP status).
++enum AppleAuthenticationHTTP {
++    static let headerLimit = 64 * 1024
++    static let bodyLimit = 2 * 1024 * 1024
++    static let wireLimit = bodyLimit + 4 * headerLimit
++    static let endpoint = URL(string: "https://gsa.apple.com/grandslam/GsService2")!
++    static let separator = Data("\r\n\r\n".utf8)
++
++    static func token(_ value: String) -> Bool {
++        let allowed = Set("!#$%&'*+-.^_`|~0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".utf8)
++        return !value.isEmpty && value.utf8.allSatisfy { allowed.contains($0) }
++    }
++    static func value(_ value: String) -> Bool {
++        value.utf8.allSatisfy { $0 == 9 || ($0 >= 32 && $0 != 127) }
++    }
++
++    static func encode(_ request: URLRequest) throws -> Data {
++        guard request.url == endpoint, request.httpMethod == "POST", request.httpBodyStream == nil,
++              let body = request.httpBody, body.count <= bodyLimit else {
++            throw AppleAuthenticationTransportError.invalidRequest
++        }
++        var head = "POST /grandslam/GsService2 HTTP/1.1\r\nHost: gsa.apple.com\r\nConnection: close\r\nAccept-Encoding: identity\r\nContent-Length: \(body.count)\r\n"
++        for (name, header) in (request.allHTTPHeaderFields ?? [:]).sorted(by: { $0.key < $1.key }) {
++            guard token(name), value(header) else { throw AppleAuthenticationTransportError.invalidRequest }
++            if ["host", "connection", "content-length", "transfer-encoding", "accept-encoding"].contains(name.lowercased()) { continue }
++            head += "\(name): \(header)\r\n"
++        }
++        head += "\r\n"
++        guard head.utf8.count <= headerLimit else { throw AppleAuthenticationTransportError.invalidRequest }
++        return Data(head.utf8) + body
++    }
++
++    static func parse(_ bytes: Data, eof: Bool = false) throws -> (Data, HTTPURLResponse)? {
++        guard bytes.count <= wireLimit else { throw AppleAuthenticationTransportError.responseTooLarge }
++        var offset = 0
++        var informationalCount = 0
++        while true {
++            guard let end = bytes.range(of: separator, in: offset..<bytes.endIndex) else {
++                guard bytes.count - offset <= headerLimit else { throw AppleAuthenticationTransportError.responseTooLarge }
++                if eof { throw AppleAuthenticationTransportError.incompleteResponse }
++                return nil
++            }
++            guard end.upperBound - offset <= headerLimit,
++                  let header = String(data: bytes.subdata(in: offset..<end.lowerBound), encoding: .isoLatin1) else {
++                throw AppleAuthenticationTransportError.invalidResponse
++            }
++            let lines = header.components(separatedBy: "\r\n")
++            let status = lines[0].split(separator: " ", maxSplits: 2, omittingEmptySubsequences: false)
++            guard status.count >= 2, ["HTTP/1.0", "HTTP/1.1"].contains(String(status[0])),
++                  status[1].count == 3, status[1].utf8.allSatisfy({ (48...57).contains($0) }),
++                  let code = Int(status[1]), (100...599).contains(code), value(lines[0]) else {
++                throw AppleAuthenticationTransportError.invalidResponse
++            }
++            var headers: [String: String] = [:]
++            for line in lines.dropFirst() {
++                guard let colon = line.firstIndex(of: ":") else { throw AppleAuthenticationTransportError.invalidResponse }
++                let name = String(line[..<colon]).lowercased()
++                let content = String(line[line.index(after: colon)...]).trimmingCharacters(in: .whitespaces)
++                guard token(name), value(content), !line.hasPrefix(" "), !line.hasPrefix("\t") else {
++                    throw AppleAuthenticationTransportError.invalidResponse
++                }
++                // Even equal duplicate lengths are rejected; ambiguity is unnecessary for this endpoint.
++                if headers[name] != nil && ["content-length", "transfer-encoding", "content-encoding"].contains(name) {
++                    throw AppleAuthenticationTransportError.invalidResponse
++                }
++                headers[name] = headers[name].map { $0 + ", " + content } ?? content
++            }
++            offset = end.upperBound
++            if code < 200 {
++                informationalCount += 1
++                guard code != 101, informationalCount <= 4,
++                      headers["transfer-encoding"] == nil, headers["content-length"] == nil else {
++                    throw AppleAuthenticationTransportError.invalidResponse
++                }
++                continue
++            }
++            guard headers["content-encoding"] == nil || headers["content-encoding"]?.lowercased() == "identity",
++                  !(headers["content-length"] != nil && headers["transfer-encoding"] != nil),
++                  let response = HTTPURLResponse(url: endpoint, statusCode: code, httpVersion: String(status[0]), headerFields: headers) else {
++                throw AppleAuthenticationTransportError.invalidResponse
++            }
++            if [204, 304].contains(code) {
++                guard bytes.count == offset else { throw AppleAuthenticationTransportError.invalidResponse }
++                return (Data(), response)
++            }
++            if let transfer = headers["transfer-encoding"] {
++                guard transfer.lowercased() == "chunked" else { throw AppleAuthenticationTransportError.invalidResponse }
++                guard let decoded = try decodeChunks(bytes, from: offset) else {
++                    if eof { throw AppleAuthenticationTransportError.incompleteResponse }
++                    return nil
++                }
++                return (decoded, response)
++            }
++            if let length = headers["content-length"] {
++                guard !length.isEmpty, length.utf8.allSatisfy({ (48...57).contains($0) }),
++                      let count = Int(length), count <= bodyLimit else { throw AppleAuthenticationTransportError.invalidResponse }
++                guard bytes.count - offset <= count else { throw AppleAuthenticationTransportError.invalidResponse }
++                if bytes.count - offset == count { return (bytes.subdata(in: offset..<bytes.count), response) }
++                if eof { throw AppleAuthenticationTransportError.incompleteResponse }
++                return nil
++            }
++            guard bytes.count - offset <= bodyLimit else { throw AppleAuthenticationTransportError.responseTooLarge }
++            return eof ? (bytes.subdata(in: offset..<bytes.count), response) : nil
++        }
++    }
++
++    private static func decodeChunks(_ bytes: Data, from start: Int) throws -> Data? {
++        let crlf = Data("\r\n".utf8)
++        var cursor = start
++        var output = Data()
++        var chunks = 0
++        while true {
++            guard let line = bytes.range(of: crlf, in: cursor..<bytes.count) else {
++                guard bytes.count - cursor <= 1024 else { throw AppleAuthenticationTransportError.invalidResponse }
++                return nil
++            }
++            guard line.lowerBound > cursor, line.lowerBound - cursor <= 1024,
++                  let text = String(data: bytes.subdata(in: cursor..<line.lowerBound), encoding: .ascii), value(text) else {
++                throw AppleAuthenticationTransportError.invalidResponse
++            }
++            let hex = String(text.split(separator: ";", maxSplits: 1, omittingEmptySubsequences: false)[0])
++            guard !hex.isEmpty, hex.count <= 8, hex.utf8.allSatisfy({ (48...57).contains($0) || (65...70).contains($0) || (97...102).contains($0) }),
++                  let count = Int(hex, radix: 16), count <= bodyLimit - output.count else {
++                throw AppleAuthenticationTransportError.invalidResponse
++            }
++            cursor = line.upperBound
++            chunks += 1
++            guard chunks <= 16384 else { throw AppleAuthenticationTransportError.responseTooLarge }
++            if count == 0 {
++                let trailerStart = cursor
++                while true {
++                    guard let trailer = bytes.range(of: crlf, in: cursor..<bytes.count) else {
++                        guard bytes.count - trailerStart <= headerLimit else { throw AppleAuthenticationTransportError.responseTooLarge }
++                        return nil
++                    }
++                    guard trailer.upperBound - trailerStart <= headerLimit else { throw AppleAuthenticationTransportError.responseTooLarge }
++                    if trailer.lowerBound == cursor {
++                        guard trailer.upperBound == bytes.count else { throw AppleAuthenticationTransportError.invalidResponse }
++                        return output
++                    }
++                    guard let field = String(data: bytes.subdata(in: cursor..<trailer.lowerBound), encoding: .isoLatin1),
++                          let colon = field.firstIndex(of: ":"), token(String(field[..<colon])), value(field),
++                          !["content-length", "transfer-encoding", "content-encoding"].contains(String(field[..<colon]).lowercased()) else {
++                        throw AppleAuthenticationTransportError.invalidResponse
++                    }
++                    cursor = trailer.upperBound
++                }
++            }
++            guard bytes.count - cursor >= count + 2 else { return nil }
++            guard bytes.subdata(in: (cursor + count)..<(cursor + count + 2)) == crlf else {
++                throw AppleAuthenticationTransportError.invalidResponse
++            }
++            output.append(bytes.subdata(in: cursor..<(cursor + count)))
++            cursor += count + 2
++        }
++    }
++}
++
++final class AppleAuthenticationTransport {
++    private let queue = DispatchQueue(label: "AltSign.AppleAuthenticationHTTP1")
++    private var connection: NWConnection?
++    private var completion: ((Result<(Data, HTTPURLResponse), Error>) -> Void)?
++    private var keepAlive: AppleAuthenticationTransport?
++    private var deadline: DispatchWorkItem?
++    private var received = Data()
++    private var didSend = false
++
++    static func send(_ request: URLRequest, completion: @escaping (Result<(Data, HTTPURLResponse), Error>) -> Void) {
++        do {
++            let wire = try AppleAuthenticationHTTP.encode(request)
++            let operation = AppleAuthenticationTransport()
++            operation.completion = completion
++            operation.keepAlive = operation
++            operation.start(wire)
++        } catch { completion(.failure(error)) }
++    }
++
++    private func start(_ wire: Data) {
++        let tls = NWProtocolTLS.Options()
++        // Use the system's default certificate chain/hostname validation. Never install a trust override.
++        sec_protocol_options_set_peer_authentication_required(tls.securityProtocolOptions, true)
++        sec_protocol_options_set_min_tls_protocol_version(tls.securityProtocolOptions, .TLSv12)
++        sec_protocol_options_set_tls_server_name(tls.securityProtocolOptions, "gsa.apple.com")
++        sec_protocol_options_add_tls_application_protocol(tls.securityProtocolOptions, "http/1.1")
++        // Isolate TLS sessions too, so no cached session can change this diagnostic path.
++        sec_protocol_options_set_tls_resumption_enabled(tls.securityProtocolOptions, false)
++        let parameters = NWParameters(tls: tls, tcp: NWProtocolTCP.Options())
++        let connection = NWConnection(host: "gsa.apple.com", port: 443, using: parameters)
++        self.connection = connection
++        connection.stateUpdateHandler = { [weak self] state in
++            guard let self = self, self.completion != nil else { return }
++            switch state {
++            case .ready:
++                guard !self.didSend else { return }
++                self.didSend = true
++                connection.send(content: wire, completion: .contentProcessed { [weak self] error in
++                    guard let self = self, self.completion != nil else { return }
++                    if let error = error { self.finish(.failure(error)) } else { self.receive() }
++                })
++            case .failed(let error): self.finish(.failure(error))
++            case .cancelled: self.finish(.failure(URLError(.cancelled)))
++            default: break
++            }
++        }
++        let deadline = DispatchWorkItem { [weak self] in self?.finish(.failure(AppleAuthenticationTransportError.timedOut)) }
++        self.deadline = deadline
++        queue.asyncAfter(deadline: .now() + 30, execute: deadline)
++        connection.start(queue: queue)
++    }
++
++    private func receive() {
++        connection?.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, complete, error in
++            guard let self = self, self.completion != nil else { return }
++            do {
++                if let data = data { self.received.append(data) }
++                if let response = try AppleAuthenticationHTTP.parse(self.received, eof: complete) {
++                    self.finish(.success(response))
++                } else if let error = error {
++                    self.finish(.failure(error))
++                } else { self.receive() }
++            } catch { self.finish(.failure(error)) }
++        }
++    }
++
++    private func finish(_ result: Result<(Data, HTTPURLResponse), Error>) {
++        guard let callback = completion else { return }
++        completion = nil
++        deadline?.cancel()
++        deadline = nil
++        connection?.stateUpdateHandler = nil
++        connection?.cancel()
++        connection = nil
++        received.removeAll()
++        keepAlive = nil
++        callback(result)
++    }
++}
