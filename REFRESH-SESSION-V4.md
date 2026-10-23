@@ -50,3 +50,13 @@ profile creation/expiry advancement, a fresh app launch and a cold-start Refresh
 Offline results or installation alone must not be reported as end-to-end success.
 This change reduces unnecessary password logins; it cannot manufacture a valid
 token if the first login is rejected with 503.
+
+## Build result
+
+Source `2e41baa` passed 69 authentication, 234 HTTP framing, 73 Refresh/session
+integration and 8 Objective-C session isolation assertions, followed by a successful
+Xcode iPhone Release build in
+[Mac run 39907349211](https://github.com/Hyoni1129/AltStore-auth-fix/actions/runs/39907349211).
+The final user instruction is to deliver the completed IPA only; signing,
+installation and real-device Refresh will be performed by the user. No successful
+live Refresh has been established for 6904.

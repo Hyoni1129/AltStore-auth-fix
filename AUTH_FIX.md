@@ -1,5 +1,11 @@
 # Authentication test build
 
+Latest artifact: **6904**, source `2e41baa`. See [REFRESH-SESSION-V4.md](REFRESH-SESSION-V4.md).
+The Mac iPhone Release build succeeded in run `39907349211`; 384 offline assertions
+passed, including the newly covered Refresh/session bridge and session isolation.
+The user will install and test Refresh. Real-device success remains unverified.
+Earlier revision notes below describe historical builds.
+
 Latest revision: **6903**, source `e0e1b24`, built successfully in [Mac run 39899757717](https://github.com/Hyoni1129/AltStore-auth-fix/actions/runs/39899757717). See [TRANSPORT-TEST-NOTES.md](TRANSPORT-TEST-NOTES.md). Offline checks: 69 authentication assertions and 234 transport assertions. The reported initial init/503 is not yet confirmed resolved on the device. The v2 SMS correction remains in this build.
 
 The following earlier validation notes are historical.
