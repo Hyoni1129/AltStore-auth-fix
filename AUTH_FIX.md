@@ -32,7 +32,7 @@ The offline harness checks SMS success, case-insensitive PE-token headers, fresh
 ## Device acceptance
 
 1. Preserve the original IPA and back up the existing app's accessible data before replacing it. Do not delete the app or reset pairing as a preparatory step.
-2. Sign the test IPA with the same locally authenticated Apple account used for the existing installation, and verify its final bundle identifier before an update install.
+2. Run `python3 Scripts/prepare_device_ipa.py unsigned.ipa local-device.ipa --udid YOUR_DEVICE_UDID` on the local signing computer. This restores the app's ALTDeviceID without uploading a device identifier to CI. Sign that copy with the same locally authenticated Apple account used for the existing installation, and verify its final bundle identifier before an update install.
 3. Fix the account, selected anisette provider, and network for one login attempt. Enter the password and any verification code directly on the device.
 4. Collect only `AltStoreAuth stage=… status=…` entries. If the attempt fails, use the stage and HTTP status to select the next correction. Do not request repeated logins without a code or configuration change that tests a specific hypothesis.
 5. Require successful account/team setup, one actual app Refresh, extension of its signing expiry, and successful launch. Check background refresh separately.
