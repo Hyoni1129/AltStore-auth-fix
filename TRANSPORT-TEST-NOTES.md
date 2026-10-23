@@ -30,3 +30,13 @@ If 503 persists on this build, the connection-pool hypothesis remains unsupporte
 the next investigation needs a sanitized stage/status trace with the chosen
 anisette provider and a controlled comparison to a successful signing client.
 Repeated login/SMS requests or deleting pairing data are not part of this patch.
+
+## Build result
+
+Source `e0e1b24` passed 69 authentication assertions and 234 HTTP transport
+assertions, then completed the Xcode iPhone Release build in
+[Mac run 39899757717](https://github.com/Hyoni1129/AltStore-auth-fix/actions/runs/39899757717).
+The downloaded IPA checksum, ARM64 binaries, build 6903, new transport/SMS markers,
+ZIP integrity and matching widget version were checked locally. Device preparation
+changed only the main Info.plist; compiled contents were preserved exactly.
+Live Apple login and app Refresh remain unverified on build 6903.

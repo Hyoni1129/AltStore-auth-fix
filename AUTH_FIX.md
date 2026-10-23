@@ -1,6 +1,10 @@
 # Authentication test build
 
-Current revision: build 6902. See [SMS_FIX_V2.md](SMS_FIX_V2.md) for the SMS/trusted-device separation correction prompted by the installed-device test. The earlier build's automatic SMS-to-trusted-device fallback has been removed.
+Latest revision: **6903**, source `e0e1b24`, built successfully in [Mac run 39899757717](https://github.com/Hyoni1129/AltStore-auth-fix/actions/runs/39899757717). See [TRANSPORT-TEST-NOTES.md](TRANSPORT-TEST-NOTES.md). Offline checks: 69 authentication assertions and 234 transport assertions. The reported initial init/503 is not yet confirmed resolved on the device. The v2 SMS correction remains in this build.
+
+The following earlier validation notes are historical.
+
+Previous revision: build 6902. See [SMS_FIX_V2.md](SMS_FIX_V2.md) for the SMS/trusted-device separation correction prompted by the installed-device test. The earlier build's automatic SMS-to-trusted-device fallback has been removed.
 
 Build 6902 completed in [Mac run 39896930226](https://github.com/Hyoni1129/AltStore-auth-fix/actions/runs/39896930226), source `5d7f2c7`, with all **69** offline regression assertions passing. The IPA was downloaded, checksum-verified, and prepared locally. Real SMS login and app Refresh remain to be confirmed on the installed v2.
 
@@ -27,7 +31,7 @@ git submodule update --init --recursive
 bash Scripts/build_auth_ipa.sh
 ```
 
-The build applies `Patches/AltSign-auth-fix.patch` to the pinned AltSign submodule and first compiles/runs an offline regression harness extracted from the actual patched two-factor functions. It then builds an unsigned iOS app and packages `build/AltStore-auth-test.ipa` with a checksum. The unsigned build is named **AltStore Auth Test**, build 6901, and keeps the upstream app identifier so a local signing tool can update the existing app where the signing identity matches.
+The build applies `Patches/AltSign-auth-fix.patch` to the pinned AltSign submodule and first compiles/runs an offline regression harness extracted from the actual patched two-factor functions. It then builds an unsigned iOS app and packages `build/AltStore-auth-test.ipa` with a checksum. The unsigned build is named **AltStore Auth Test**, build 6903, and keeps the upstream app identifier so a local signing tool can update the existing app where the signing identity matches.
 
 The CI workflow uses a standard GitHub-hosted macOS runner with read-only repository permissions. It does not require an Apple account, certificate, provisioning profile, pairing file, or device identifier. Account authentication and signing must happen locally after downloading the artifact.
 
