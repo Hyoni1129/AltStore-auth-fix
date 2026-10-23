@@ -38,6 +38,7 @@ xcodebuild build \
   CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
   CODE_SIGN_IDENTITY='' DEVELOPMENT_TEAM='' \
   ENABLE_USER_SCRIPT_SANDBOXING=NO \
+  OTHER_CFLAGS='$(inherited) -Wno-error=implicit-int-conversion-on-negation' \
   2>&1 | tee build-auth.log
 
 app='build/DerivedData/Build/Products/Release-iphoneos/AltStore.app'
