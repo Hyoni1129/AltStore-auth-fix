@@ -112,7 +112,7 @@ final class AuthenticationOperation {
 '''
 profile_prelude = r'''
 }
-enum Logger { static let sideload = OSLog.Logger(subsystem: "offline.fixture", category: "refresh") }
+extension Logger { static let sideload = Logger(subsystem: "offline.fixture", category: "refresh") }
 extension NSError { func withLocalizedFailure(_ message: String) -> NSError { self } }
 struct ALTProvisioningProfile: Hashable { let bundleIdentifier: String }
 final class FakeDevice {
