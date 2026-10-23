@@ -385,6 +385,22 @@ private extension AuthenticationOperation
     func authenticate(appleID: String, password: String, completionHandler: @escaping (Result<(ALTAccount, ALTAppleAPISession), Swift.Error>) -> Void)
     {
         self.appleIDEmailAddress = appleID
+
+        ALTAppleAPI.shared.authenticationUserAgent = nil
+        ALTAppleAPI.shared.twoFactorAuthenticationHint = nil
+        ALTAppleAPI.shared.anisetteDataRefreshHandler = { [weak self] completionHandler in
+            guard let self else { return completionHandler(nil, OperationError.unknown()) }
+
+            let refreshOperation = FetchAnisetteDataOperation(context: self.context)
+            refreshOperation.resultHandler = { result in
+                switch result
+                {
+                case .failure(let error): completionHandler(nil, error)
+                case .success(let anisetteData): completionHandler(anisetteData, nil)
+                }
+            }
+            self.operationQueue.addOperation(refreshOperation)
+        }
         
         // Apple can ask for the anisette data to be resynchronized partway through signing in (hsc 434),
         // which only the anisette server that provisioned it can do.
@@ -416,7 +432,7 @@ private extension AuthenticationOperation
                 {
                     verificationHandler = { (completionHandler) in
                         DispatchQueue.main.async {
-                            let alertController = UIAlertController(title: NSLocalizedString("Please enter the 6-digit verification code that was sent to your Apple devices.", comment: ""), message: nil, preferredStyle: .alert)
+                            let alertController = UIAlertController(title: NSLocalizedString("Please enter the 6-digit verification code that was sent to your Apple devices.", comment: ""), message: ALTAppleAPI.shared.twoFactorAuthenticationHint, preferredStyle: .alert)
                             alertController.addTextField { (textField) in
                                 textField.autocorrectionType = .no
                                 textField.autocapitalizationType = .none

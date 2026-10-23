@@ -246,6 +246,11 @@ private extension FetchAnisetteDataOperation
         decoder.keyDecodingStrategy = .convertFromSnakeCase
         
         let response: Response = try await self.send(URLRequest(url: clientInfoURL), decoder: decoder, anisetteServerURL: serverURL)
+
+        guard !response.clientInfo.isEmpty, !response.userAgent.isEmpty,
+              !response.clientInfo.contains("\r"), !response.clientInfo.contains("\n"),
+              !response.userAgent.contains("\r"), !response.userAgent.contains("\n")
+        else { throw AnisetteServerError.invalidResponse(serverURL: serverURL) }
         
         // 2. Provision against this server unless we have a cached anisette identifier + adi.pb with the same client info.
         // A cached adi.pb from a different anisette implementation is no longer accepted, so discard it when the client info changes.
@@ -278,6 +283,9 @@ private extension FetchAnisetteDataOperation
         }
 
         let (machineID, oneTimePassword, routingInfo) = try await self.fetchHeaders(from: serverURL, identity: identity, adiPB: adiPB, sim: sim)
+
+        // GrandSlam must use the same client identity as provisioning, including after 2FA refreshes.
+        ALTAppleAPI.shared.authenticationUserAgent = response.userAgent
 
         // 4. Construct & return ALTAnisetteData
         return ALTAnisetteData(

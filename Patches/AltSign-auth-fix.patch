@@ -1,0 +1,213 @@
+diff --git a/AltSign/Apple API/ALTAppleAPI.h b/AltSign/Apple API/ALTAppleAPI.h
+index 8413918..1288253 100644
+--- a/AltSign/Apple API/ALTAppleAPI.h	
++++ b/AltSign/Apple API/ALTAppleAPI.h	
+@@ -36,6 +36,9 @@ NS_ASSUME_NONNULL_BEGIN
+ // anisette data (anisette v3 servers report it in /v3/client_info). Defaults to akd's user agent.
+ @property (nonatomic, copy, nullable) NSString *authenticationUserAgent;
+ 
++// User-facing instructions when SMS delivery falls back to a trusted-device verification code.
++@property (nonatomic, copy, nullable) NSString *twoFactorAuthenticationHint;
++
+ // Optional. Called once when GrandSlam answers hsc 434 (anisette data out of sync) with the X-Apple-I-MD-DATA
+ // value it returned. The handler should resynchronize the anisette provider and return fresh anisette data.
+ @property (nonatomic, copy, nullable) void (^anisetteDataResyncHandler)(NSString *sim, void (^completionHandler)(ALTAnisetteData *_Nullable anisetteData, NSError *_Nullable error));
+diff --git a/AltSign/Sources/ALTAppleAPI+Authentication.swift b/AltSign/Sources/ALTAppleAPI+Authentication.swift
+index 7c04190..7142a7d 100644
+--- a/AltSign/Sources/ALTAppleAPI+Authentication.swift
++++ b/AltSign/Sources/ALTAppleAPI+Authentication.swift
+@@ -320,6 +320,7 @@ private extension ALTAppleAPI
+                                            idmsToken: String,
+                                            anisetteData: ALTAnisetteData,
+                                            isCodeAlreadySent: Bool,
++                                           allowsManualCode: Bool = false,
+                                            verificationHandler: @escaping (@escaping (String?) -> Void) -> Void,
+                                            completionHandler: @escaping (Result<Void, Error>) -> Void)
+     {
+@@ -344,7 +345,9 @@ private extension ALTAppleAPI
+                         {
+                             let (data, httpResponse) = try result.get()
+                             
+-                            guard (200 ..< 300).contains(httpResponse.statusCode) else { throw ALTAppleAPIError.unknown(statusCode: httpResponse.statusCode) }
++                            guard (200 ..< 300).contains(httpResponse.statusCode) else {
++                                throw ALTAppleAPIError.unknown(statusCode: httpResponse.statusCode, failure: NSLocalizedString("Could not validate the trusted-device verification code with Apple.", comment: ""))
++                            }
+                             
+                             guard let responseDictionary = try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else {
+                                 throw URLError(.badServerResponse)
+@@ -387,8 +390,14 @@ private extension ALTAppleAPI
+             do
+             {
+                 let (_, response) = try result.get()
++                if allowsManualCode && [403, 415].contains(response.statusCode)
++                {
++                    // No retries or synthetic success: a real trusted-device code must still validate.
++                    self.twoFactorAuthenticationHint = NSLocalizedString("SMS delivery failed. Enter a current verification code for this Apple Account from a trusted Apple device. If you do not have a code, cancel this attempt.", comment: "")
++                    return verificationHandler(responseHandler)
++                }
+                 guard (200 ..< 300).contains(response.statusCode) else {
+-                    throw ALTAppleAPIError.unknown(statusCode: response.statusCode, failure: NSLocalizedString("Could not request a verification code from Apple.", comment: ""))
++                    throw ALTAppleAPIError.unknown(statusCode: response.statusCode, failure: NSLocalizedString("Could not request a trusted-device verification code from Apple.", comment: ""))
+                 }
+                 
+                 verificationHandler(responseHandler)
+@@ -433,50 +442,71 @@ private extension ALTAppleAPI
+             do
+             {
+                 let (_, response) = try result.get()
++                if [403, 415].contains(response.statusCode)
++                {
++                    self.twoFactorAuthenticationHint = NSLocalizedString("SMS delivery failed. Use the verification code from your trusted Apple device.", comment: "")
++                    return self.refreshAnisetteData(anisetteData) { result in
++                        switch result
++                        {
++                        case .failure(let error): completionHandler(.failure(error))
++                        case .success(let freshData):
++                            self.requestTrustedDeviceTwoFactorCode(dsid: dsid, idmsToken: idmsToken, anisetteData: freshData,
++                                                                  isCodeAlreadySent: false, allowsManualCode: true,
++                                                                  verificationHandler: verificationHandler, completionHandler: completionHandler)
++                        }
++                    }
++                }
+                 guard (200 ..< 300).contains(response.statusCode) else {
+                     throw ALTAppleAPIError.unknown(statusCode: response.statusCode, failure: NSLocalizedString("Could not request an SMS verification code from Apple.", comment: ""))
+                 }
+                 
+                 func responseHandler(verificationCode: String?)
+                 {
+-                    do
+-                    {
+-                        guard let verificationCode = verificationCode else { throw ALTAppleAPIError(.requiresTwoFactorAuthentication) }
+-                        
+-                        var request = self.makeTwoFactorCodeRequest(url: verifyURL, dsid: dsid, idmsToken: idmsToken, anisetteData: anisetteData)
+-                        request.httpMethod = "POST"
+-                        
+-                        let bodyXML = [
+-                            "securityCode.code": verificationCode,
+-                            "serverInfo": [
+-                                "mode": "sms",
+-                                "phoneNumber.id": "1"
+-                            ]
+-                        ] as [String : Any]
++                    guard let verificationCode else { return completionHandler(.failure(ALTAppleAPIError(.requiresTwoFactorAuthentication))) }
++                    // Code entry can outlive the initial one-time anisette password.
++                    self.refreshAnisetteData(anisetteData) { result in
++                        do
++                        {
++                            let anisetteData = try result.get()
+                         
+-                        let bodyData = try PropertyListSerialization.data(fromPropertyList: bodyXML, format: .xml, options: 0)
+-                        request.httpBody = bodyData
++                            var request = self.makeTwoFactorCodeRequest(url: verifyURL, dsid: dsid, idmsToken: idmsToken, anisetteData: anisetteData)
++                            request.httpMethod = "POST"
++
++                            let bodyXML = [
++                                "securityCode.code": verificationCode,
++                                "serverInfo": [
++                                    "mode": "sms",
++                                    "phoneNumber.id": "1"
++                                ]
++                            ] as [String : Any]
++
++                            let bodyData = try PropertyListSerialization.data(fromPropertyList: bodyXML, format: .xml, options: 0)
++                            request.httpBody = bodyData
+                         
+-                        self.sendGSARequest(request) { (result) in
+-                            do
+-                            {
+-                                let (_, httpResponse) = try result.get()
++                            self.sendGSARequest(request) { (result) in
++                                do
++                                {
++                                    let (_, httpResponse) = try result.get()
+                                 
+-                                guard httpResponse.statusCode == 200,
+-                                      httpResponse.allHeaderFields.keys.contains("X-Apple-PE-Token") // PE token is included in headers if we sent correct verification code.
+-                                else { throw ALTAppleAPIError(.incorrectVerificationCode) }
++                                    guard (200 ..< 300).contains(httpResponse.statusCode) else {
++                                        throw ALTAppleAPIError.unknown(statusCode: httpResponse.statusCode, failure: NSLocalizedString("Could not validate the SMS verification code with Apple.", comment: ""))
++                                    }
++                                    guard httpResponse.statusCode == 200,
++                                          httpResponse.value(forHTTPHeaderField: "X-Apple-PE-Token") != nil
++                                    else { throw ALTAppleAPIError(.incorrectVerificationCode) }
+                                 
+-                                completionHandler(.success(()))
+-                            }
+-                            catch
+-                            {
+-                                completionHandler(.failure(error))
++                                    completionHandler(.success(()))
++                                }
++                                catch
++                                {
++                                    completionHandler(.failure(error))
++                                }
+                             }
+                         }
+-                    }
+-                    catch
+-                    {
+-                        completionHandler(.failure(error))
++                        catch
++                        {
++                            completionHandler(.failure(error))
++                        }
+                     }
+                 }
+                 
+@@ -518,6 +548,29 @@ private extension ALTAppleAPI
+ 
+ private extension ALTAppleAPI
+ {
++    // Only allowlisted operation names are logged, never bodies, headers, account IDs, or codes.
++    func authenticationStage(for request: URLRequest) -> String
++    {
++        switch request.url?.path
++        {
++        case "/auth/verify/trusteddevice": return "trusted-device-request"
++        case "/grandslam/GsService2/validate": return "trusted-device-validate"
++        case "/auth/verify/phone/put": return "sms-request"
++        case "/auth/verify/phone/securitycode": return "sms-validate"
++        case "/grandslam/GsService2":
++            if let body = request.httpBody,
++               let plist = try? PropertyListSerialization.propertyList(from: body, format: nil) as? [String: Any],
++               let parameters = plist["Request"] as? [String: Any],
++               let operation = parameters["o"] as? String,
++               ["init", "complete", "apptokens"].contains(operation)
++            {
++                return operation
++            }
++            return "sign-in"
++        default: return "authentication"
++        }
++    }
++
+     // GrandSlam rejects requests whose User-Agent and X-MMe-Client-Info don't match the client that generated the anisette data.
+     var userAgent: String { self.authenticationUserAgent ?? "akd/1.0 CFNetwork/808.1.4" }
+     
+@@ -536,11 +589,7 @@ private extension ALTAppleAPI
+             {
+                 guard let data = data, let httpResponse = response as? HTTPURLResponse else { throw error ?? ALTAppleAPIError.unknown() }
+                 
+-                #if LOG_GSA
+-                // Only log the response, NOT the request, because request headers contain the identity token and anisette data.
+-                let body = String(data: data, encoding: .utf8) ?? "<\(data.count) bytes>"
+-                print("GSA Request Body:", body)
+-                #endif
++                NSLog("AltStoreAuth stage=%@ status=%ld", self.authenticationStage(for: request), httpResponse.statusCode)
+                 
+                 completionHandler(.success((data, httpResponse)))
+             }
+@@ -587,7 +636,11 @@ private extension ALTAppleAPI
+                     let (data, httpResponse) = try result.get()
+                     
+                     // GSA answers rejected clients with an HTML error page (e.g. 503), which would otherwise surface as a plist parsing error.
+-                    guard (200 ..< 300).contains(httpResponse.statusCode) else { throw ALTAppleAPIError.unknown(statusCode: httpResponse.statusCode) }
++                    guard (200 ..< 300).contains(httpResponse.statusCode) else {
++                        let stage = self.authenticationStage(for: request)
++                        throw ALTAppleAPIError.unknown(statusCode: httpResponse.statusCode,
++                                                      failure: "Apple sign-in failed during \(stage).")
++                    }
+                     
+                     guard let responseDictionary = try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+                           let dictionary = responseDictionary["Response"] as? [String: Any],
