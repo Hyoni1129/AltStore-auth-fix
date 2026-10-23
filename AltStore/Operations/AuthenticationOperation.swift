@@ -59,6 +59,9 @@ class AuthenticationOperation: ResultOperation<(ALTTeam, ALTCertificate, ALTAppl
     private var shouldShowInstructions = false
     
     private let operationQueue = OperationQueue()
+    private let appleAPI = ALTAppleAPI()
+    private static let sessionCoordinator = AuthenticationSessionCoordinator<(ALTAccount, ALTAppleAPISession)>()
+    private var authenticationRevision: UInt64?
     
     private var submitCodeAction: UIAlertAction?
     
@@ -209,6 +212,11 @@ class AuthenticationOperation: ResultOperation<(ALTTeam, ALTCertificate, ALTAppl
     override func finish(_ result: Result<(ALTTeam, ALTCertificate, ALTAppleAPISession), Error>)
     {
         guard !self.isFinished else { return }
+        if let revision = self.authenticationRevision, revision != Keychain.shared.authenticationSessionRevision()
+        {
+            super.finish(.failure(OperationError.cancelled))
+            return
+        }
         
         switch result
         {
@@ -361,7 +369,7 @@ private extension AuthenticationOperation
         {
             Logger.sideload.notice("Authenticating Apple ID...")
             
-            self.authenticate(appleID: appleID, password: password) { (result) in
+            self.authenticate(appleID: appleID, password: password, allowsCachedSession: true) { (result) in
                 switch result
                 {
                 case .success((let account, let session)):
@@ -382,17 +390,20 @@ private extension AuthenticationOperation
         }
     }
     
-    func authenticate(appleID: String, password: String, completionHandler: @escaping (Result<(ALTAccount, ALTAppleAPISession), Swift.Error>) -> Void)
+    func authenticate(appleID: String, password: String, allowsCachedSession: Bool = false, completionHandler: @escaping (Result<(ALTAccount, ALTAppleAPISession), Swift.Error>) -> Void)
     {
         self.appleIDEmailAddress = appleID
+        let revision = Keychain.shared.authenticationSessionRevision()
+        self.authenticationRevision = revision
 
-        ALTAppleAPI.shared.authenticationUserAgent = nil
-        ALTAppleAPI.shared.twoFactorAuthenticationHint = nil
-        ALTAppleAPI.shared.twoFactorAuthenticationTitle = nil
-        ALTAppleAPI.shared.anisetteDataRefreshHandler = { [weak self] completionHandler in
+        self.appleAPI.authenticationUserAgent = nil
+        self.appleAPI.twoFactorAuthenticationHint = nil
+        self.appleAPI.twoFactorAuthenticationTitle = nil
+        self.appleAPI.anisetteDataRefreshHandler = { [weak self] completionHandler in
             guard let self else { return completionHandler(nil, OperationError.unknown()) }
 
             let refreshOperation = FetchAnisetteDataOperation(context: self.context)
+            refreshOperation.authenticationAPI = self.appleAPI
             refreshOperation.resultHandler = { result in
                 switch result
                 {
@@ -405,10 +416,11 @@ private extension AuthenticationOperation
         
         // Apple can ask for the anisette data to be resynchronized partway through signing in (hsc 434),
         // which only the anisette server that provisioned it can do.
-        ALTAppleAPI.shared.anisetteDataResyncHandler = { [weak self] (sim, completionHandler) in
+        self.appleAPI.anisetteDataResyncHandler = { [weak self] (sim, completionHandler) in
             guard let self else { return completionHandler(nil, OperationError.unknown()) }
 
             let resyncOperation = FetchAnisetteDataOperation(context: self.context)
+            resyncOperation.authenticationAPI = self.appleAPI
             resyncOperation.resynchronizationData = sim
             resyncOperation.resultHandler = { (result) in
                 switch result
@@ -422,6 +434,7 @@ private extension AuthenticationOperation
         }
 
         let fetchAnisetteDataOperation = FetchAnisetteDataOperation(context: self.context)
+        fetchAnisetteDataOperation.authenticationAPI = self.appleAPI
         fetchAnisetteDataOperation.resultHandler = { (result) in
             switch result
             {
@@ -433,8 +446,8 @@ private extension AuthenticationOperation
                 {
                     verificationHandler = { (completionHandler) in
                         DispatchQueue.main.async {
-                            let title = ALTAppleAPI.shared.twoFactorAuthenticationTitle ?? NSLocalizedString("Please enter the 6-digit verification code that was sent to your Apple devices.", comment: "")
-                            let alertController = UIAlertController(title: title, message: ALTAppleAPI.shared.twoFactorAuthenticationHint, preferredStyle: .alert)
+                            let title = self.appleAPI.twoFactorAuthenticationTitle ?? NSLocalizedString("Please enter the 6-digit verification code that was sent to your Apple devices.", comment: "")
+                            let alertController = UIAlertController(title: title, message: self.appleAPI.twoFactorAuthenticationHint, preferredStyle: .alert)
                             alertController.addTextField { (textField) in
                                 textField.autocorrectionType = .no
                                 textField.autocapitalizationType = .none
@@ -475,23 +488,75 @@ private extension AuthenticationOperation
                     verificationHandler = nil
                 }
                 
-                ALTAppleAPI.shared.authenticate(appleID: appleID, password: password, anisetteData: anisetteData,
-                                                verificationHandler: verificationHandler) { (account, session, error) in
-                    if let account = account, let session = session
-                    {
-                        completionHandler(.success((account, session)))
-                    }
-                    else
-                    {
-                        completionHandler(.failure(error ?? OperationError.unknown()))
-                    }
-                }
+                self.authenticateUsingSession(appleID: appleID, password: password,
+                    anisetteData: anisetteData, allowsCachedSession: allowsCachedSession,
+                    revision: revision,
+                    verificationHandler: verificationHandler, completionHandler: completionHandler)
             }
         }
         
         self.operationQueue.addOperation(fetchAnisetteDataOperation)
     }
     
+    func authenticateUsingSession(appleID: String, password: String, anisetteData: ALTAnisetteData,
+                                  allowsCachedSession: Bool,
+                                  revision: UInt64,
+                                  verificationHandler: ((@escaping (String?) -> Void) -> Void)?,
+                                  completionHandler: @escaping (Result<(ALTAccount, ALTAppleAPISession), Error>) -> Void)
+    {
+        let scope = AuthenticationSessionScope(account: appleID, deviceID: anisetteData.deviceUniqueIdentifier,
+                                               clientInfo: anisetteData.deviceDescription)
+        // A different Refresh group may have waited for interactive 2FA. Fetch again when its
+        // serialized turn starts, so queued operations cannot send an old one-time password.
+        func freshAnisette(_ completion: @escaping (Result<ALTAnisetteData, Error>) -> Void)
+        {
+            guard let refresh = self.appleAPI.anisetteDataRefreshHandler else { return completion(.failure(OperationError.unknown())) }
+            refresh { data, error in
+                guard let data else { return completion(.failure(error ?? OperationError.unknown())) }
+                guard data.deviceUniqueIdentifier == scope.deviceID, data.deviceDescription == scope.clientInfo else
+                {
+                    return completion(.failure(ALTAppleAPIError(.invalidAnisetteData)))
+                }
+                completion(.success(data))
+            }
+        }
+        Self.sessionCoordinator.resolve(scope: scope, allowsCachedSession: allowsCachedSession,
+            load: { Keychain.shared.cachedAuthenticationSession() },
+            persist: { Keychain.shared.storeAuthenticationSession($0, revision: revision) },
+            isCurrent: { Keychain.shared.authenticationSessionRevision() == revision && !self.isCancelled },
+            isInvalidSession: ALTAppleAPI.isAuthenticationSessionInvalid,
+            validate: { saved, completion in
+                freshAnisette { result in
+                    do {
+                        let data = try result.get()
+                        let session = ALTAppleAPISession(dsid: saved.dsid, authToken: saved.token, anisetteData: data)
+                        session.expirationDate = saved.expiresAt
+                        self.appleAPI.validateAuthenticationSession(session) { result in
+                            if case .success = result { NSLog("AltStoreAuth session=validated-cache") }
+                            completion(result.map { ($0, session) })
+                        }
+                    } catch { completion(.failure(error)) }
+                }
+            },
+            login: { completion in
+                freshAnisette { result in
+                    do {
+                        let data = try result.get()
+                        NSLog("AltStoreAuth session=fresh-login")
+                        self.appleAPI.authenticate(appleID: appleID, password: password, anisetteData: data,
+                                                  verificationHandler: verificationHandler) { account, session, error in
+                            if let account, let session { completion(.success((account, session))) }
+                            else { completion(.failure(error ?? OperationError.unknown())) }
+                        }
+                    } catch { completion(.failure(error)) }
+                }
+            },
+            credential: { value in
+                AuthenticationSessionCredential(scope: scope, dsid: value.1.dsid, token: value.1.authToken,
+                                                issuedAt: Date(), serverExpiry: value.1.expirationDate)
+            }, completion: completionHandler)
+    }
+
     func fetchTeam(for account: ALTAccount, session: ALTAppleAPISession, completionHandler: @escaping (Result<ALTTeam, Swift.Error>) -> Void)
     {
         func selectTeam(from teams: [ALTTeam])
@@ -514,7 +579,7 @@ private extension AuthenticationOperation
             }
         }
 
-        ALTAppleAPI.shared.fetchTeams(for: account, session: session) { (teams, error) in
+        self.appleAPI.fetchTeams(for: account, session: session) { (teams, error) in
             switch Result(teams, error)
             {
             case .failure(let error): completionHandler(.failure(error))
@@ -538,13 +603,13 @@ private extension AuthenticationOperation
         func requestCertificate()
         {
             let machineName = "AltStore - " + UIDevice.current.name
-            ALTAppleAPI.shared.addCertificate(machineName: machineName, to: team, session: session) { (certificate, error) in
+            self.appleAPI.addCertificate(machineName: machineName, to: team, session: session) { (certificate, error) in
                 do
                 {
                     let certificate = try Result(certificate, error).get()
                     guard let privateKey = certificate.privateKey else { throw AuthenticationError(.missingPrivateKey) }
                     
-                    ALTAppleAPI.shared.fetchCertificates(for: team, session: session) { (certificates, error) in
+                    self.appleAPI.fetchCertificates(for: team, session: session) { (certificates, error) in
                         do
                         {
                             let certificates = try Result(certificates, error).get()
@@ -598,7 +663,7 @@ private extension AuthenticationOperation
                     catch is CancellationError
                     {
                         // Cancel == revoke existing certificate
-                        try await ALTAppleAPI.shared.revoke(certificate, for: team, session: session)
+                        try await self.appleAPI.revoke(certificate, for: team, session: session)
                         requestCertificate()
                     }
                 }
@@ -609,7 +674,7 @@ private extension AuthenticationOperation
             }
         }
         
-        ALTAppleAPI.shared.fetchCertificates(for: team, session: session) { (certificates, error) in
+        self.appleAPI.fetchCertificates(for: team, session: session) { (certificates, error) in
             do
             {
                 let certificates = try Result(certificates, error).get()
@@ -669,7 +734,7 @@ private extension AuthenticationOperation
         Task<Void, Never> { @MainActor in
             do
             {
-                let devices = try await ALTAppleAPI.shared.fetchDevices(for: team, types: [.iphone, .ipad], session: session)
+                let devices = try await self.appleAPI.fetchDevices(for: team, types: [.iphone, .ipad], session: session)
                 if let udid = UserDefaults.shared.deviceID, let device = devices.first(where: { $0.identifier == udid })
                 {
                     completionHandler(.success(device))
@@ -700,7 +765,7 @@ private extension AuthenticationOperation
                             }
                             else
                             {
-                                let device = try await ALTAppleAPI.shared.registerDevice(name: UIDevice.current.name, identifier: udid, type: .iphone, team: team, session: session)
+                                let device = try await self.appleAPI.registerDevice(name: UIDevice.current.name, identifier: udid, type: .iphone, team: team, session: session)
                                 completionHandler(.success(device))
                             }
                             

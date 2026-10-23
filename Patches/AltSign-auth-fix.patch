@@ -13,11 +13,149 @@ index 8413918..908e463 100644
  // Optional. Called once when GrandSlam answers hsc 434 (anisette data out of sync) with the X-Apple-I-MD-DATA
  // value it returned. The handler should resynchronize the anisette provider and return fresh anisette data.
  @property (nonatomic, copy, nullable) void (^anisetteDataResyncHandler)(NSString *sim, void (^completionHandler)(ALTAnisetteData *_Nullable anisetteData, NSError *_Nullable error));
+diff --git a/AltSign/Apple API/ALTAppleAPI.m b/AltSign/Apple API/ALTAppleAPI.m
+index 3495fbf..e253b5b 100644
+--- a/AltSign/Apple API/ALTAppleAPI.m	
++++ b/AltSign/Apple API/ALTAppleAPI.m	
+@@ -890,6 +890,17 @@ NS_ASSUME_NONNULL_END
+     }];
+     
+     NSURLSessionDataTask *dataTask = [self.session dataTaskWithRequest:request completionHandler:^(NSData * _Nullable data, NSURLResponse * _Nullable response, NSError * _Nullable error) {
++        NSHTTPURLResponse *httpResponse = [response isKindOfClass:[NSHTTPURLResponse class]] ? (NSHTTPURLResponse *)response : nil;
++        if (httpResponse != nil && (httpResponse.statusCode < 200 || httpResponse.statusCode >= 300))
++        {
++            NSError *httpError = [NSError errorWithDomain:ALTAppleAPIErrorDomain code:ALTAppleAPIErrorUnknown userInfo:@{
++                ALTHTTPStatusCode: @(httpResponse.statusCode),
++                NSLocalizedDescriptionKey: [NSString stringWithFormat:@"Apple developer service returned HTTP %ld.", (long)httpResponse.statusCode]
++            }];
++            completionHandler(nil, httpError);
++            return;
++        }
++
+         if (data == nil)
+         {
+             completionHandler(nil, error);
+@@ -966,6 +977,17 @@ NS_ASSUME_NONNULL_END
+     }];
+     
+     NSURLSessionDataTask *dataTask = [self.session dataTaskWithRequest:request completionHandler:^(NSData * _Nullable data, NSURLResponse * _Nullable response, NSError * _Nullable error) {
++        NSHTTPURLResponse *httpResponse = [response isKindOfClass:[NSHTTPURLResponse class]] ? (NSHTTPURLResponse *)response : nil;
++        if (httpResponse != nil && (httpResponse.statusCode < 200 || httpResponse.statusCode >= 300))
++        {
++            NSError *httpError = [NSError errorWithDomain:ALTAppleAPIErrorDomain code:ALTAppleAPIErrorUnknown userInfo:@{
++                ALTHTTPStatusCode: @(httpResponse.statusCode),
++                NSLocalizedDescriptionKey: [NSString stringWithFormat:@"Apple developer service returned HTTP %ld.", (long)httpResponse.statusCode]
++            }];
++            completionHandler(nil, httpError);
++            return;
++        }
++
+         if (data == nil)
+         {
+             completionHandler(nil, error);
+@@ -1026,6 +1048,17 @@ NS_ASSUME_NONNULL_END
+     }];
+     
+     NSURLSessionDataTask *dataTask = [self.session dataTaskWithRequest:request completionHandler:^(NSData * _Nullable data, NSURLResponse * _Nullable response, NSError * _Nullable error) {
++        NSHTTPURLResponse *httpResponse = [response isKindOfClass:[NSHTTPURLResponse class]] ? (NSHTTPURLResponse *)response : nil;
++        if (httpResponse != nil && (httpResponse.statusCode < 200 || httpResponse.statusCode >= 300))
++        {
++            NSError *httpError = [NSError errorWithDomain:ALTAppleAPIErrorDomain code:ALTAppleAPIErrorUnknown userInfo:@{
++                ALTHTTPStatusCode: @(httpResponse.statusCode),
++                NSLocalizedDescriptionKey: [NSString stringWithFormat:@"Apple developer service returned HTTP %ld.", (long)httpResponse.statusCode]
++            }];
++            completionHandler(nil, httpError);
++            return;
++        }
++
+         if (data == nil)
+         {
+             completionHandler(nil, error);
+diff --git a/AltSign/Apple API/ALTAppleAPISession.h b/AltSign/Apple API/ALTAppleAPISession.h
+index c718519..5818673 100644
+--- a/AltSign/Apple API/ALTAppleAPISession.h	
++++ b/AltSign/Apple API/ALTAppleAPISession.h	
+@@ -17,6 +17,7 @@ NS_ASSUME_NONNULL_BEGIN
+ @property (nonatomic, copy) NSString *dsid;
+ @property (nonatomic, copy) NSString *authToken;
+ @property (nonatomic, copy) ALTAnisetteData *anisetteData;
++@property (nonatomic, copy, nullable) NSDate *expirationDate;
+ 
+ - (instancetype)initWithDSID:(NSString *)dsid authToken:(NSString *)authToken anisetteData:(ALTAnisetteData *)anisetteData;
+ 
+diff --git a/AltSign/Apple API/ALTAppleAPISession.m b/AltSign/Apple API/ALTAppleAPISession.m
+index ffa5636..36f640c 100644
+--- a/AltSign/Apple API/ALTAppleAPISession.m	
++++ b/AltSign/Apple API/ALTAppleAPISession.m	
+@@ -29,7 +29,7 @@
+ 
+ - (NSString *)description
+ {
+-    return [NSString stringWithFormat:@"<%@: %p, DSID: %@, Auth Token: %@, Anisette Data: %@>", NSStringFromClass([self class]), self, self.dsid, self.authToken, self.anisetteData];
++    return [NSString stringWithFormat:@"<%@: %p, authentication material redacted>", NSStringFromClass([self class]), self];
+ }
+ 
+ @end
 diff --git a/AltSign/Sources/ALTAppleAPI+Authentication.swift b/AltSign/Sources/ALTAppleAPI+Authentication.swift
-index 7c04190..54c9931 100644
+index 7c04190..364f2df 100644
 --- a/AltSign/Sources/ALTAppleAPI+Authentication.swift
 +++ b/AltSign/Sources/ALTAppleAPI+Authentication.swift
-@@ -323,6 +323,8 @@ private extension ALTAppleAPI
+@@ -59,6 +59,19 @@ public extension ALTAppleAPIError
+ 
+ public extension ALTAppleAPI
+ {
++    static func isAuthenticationSessionInvalid(_ error: Error) -> Bool
++    {
++        let error = error as NSError
++        if error.domain == ALTUnderlyingAppleAPIErrorDomain && error.code == 1100 { return true }
++        return error.domain == ALTAppleAPIErrorDomain && (error.userInfo[ALTHTTPStatusCode] as? Int) == 401
++    }
++
++    // Revalidate a stored developer token with Apple, using freshly fetched anisette data.
++    func validateAuthenticationSession(_ session: ALTAppleAPISession, completionHandler: @escaping (Result<ALTAccount, Error>) -> Void)
++    {
++        self.fetchAccount(session: session, completionHandler: completionHandler)
++    }
++
+     @objc func authenticate(appleID unsanitizedAppleID: String,
+                             password: String,
+                             anisetteData: ALTAnisetteData,
+@@ -218,7 +231,8 @@ public extension ALTAppleAPI
+                                             case .failure(let error): completionHandler(nil, nil, error)
+                                             case .success(let token):
+                                             
+-                                                let session = ALTAppleAPISession(dsid: dsid, authToken: token, anisetteData: anisetteData)
++                                                let session = ALTAppleAPISession(dsid: dsid, authToken: token.value, anisetteData: anisetteData)
++                                                session.expirationDate = token.expiry
+                                                 self.fetchAccount(session: session) { (result) in
+                                                     switch result
+                                                     {
+@@ -288,7 +302,7 @@ private extension ALTAppleAPI
+         }
+     }
+     
+-    func fetchAuthToken(app: String, parameters: [String: Any], context: GSAContext, anisetteData: ALTAnisetteData, completionHandler: @escaping (Result<String, Error>) -> Void)
++    func fetchAuthToken(app: String, parameters: [String: Any], context: GSAContext, anisetteData: ALTAnisetteData, completionHandler: @escaping (Result<(value: String, expiry: Date?), Error>) -> Void)
+     {
+         self.sendAuthenticationRequest(parameters: parameters, anisetteData: anisetteData) { (result) in
+             do
+@@ -307,7 +321,14 @@ private extension ALTAppleAPI
+                       let authToken = tokens["token"] as? String
+                 else { throw URLError(.badServerResponse) }
+                 
+-                completionHandler(.success(authToken))
++                // Apple's app-token expiry is an absolute Unix timestamp in milliseconds.
++                let expiry: Date?
++                if let raw = tokens["expiry"] {
++                    guard let milliseconds = raw as? NSNumber, milliseconds.doubleValue.isFinite,
++                          milliseconds.doubleValue > 0 else { throw URLError(.badServerResponse) }
++                    expiry = Date(timeIntervalSince1970: milliseconds.doubleValue / 1000)
++                } else { expiry = nil }
++                completionHandler(.success((authToken, expiry)))
+             }
+             catch
+             {
+@@ -323,6 +344,8 @@ private extension ALTAppleAPI
                                             verificationHandler: @escaping (@escaping (String?) -> Void) -> Void,
                                             completionHandler: @escaping (Result<Void, Error>) -> Void)
      {
@@ -26,7 +164,7 @@ index 7c04190..54c9931 100644
          let requestURL = URL(string: "https://gsa.apple.com/auth/verify/trusteddevice")!
          let verifyURL = URL(string: "https://gsa.apple.com/grandslam/GsService2/validate")!
          
-@@ -344,7 +346,9 @@ private extension ALTAppleAPI
+@@ -344,7 +367,9 @@ private extension ALTAppleAPI
                          {
                              let (data, httpResponse) = try result.get()
                              
@@ -37,7 +175,7 @@ index 7c04190..54c9931 100644
                              
                              guard let responseDictionary = try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else {
                                  throw URLError(.badServerResponse)
-@@ -388,7 +392,7 @@ private extension ALTAppleAPI
+@@ -388,7 +413,7 @@ private extension ALTAppleAPI
              {
                  let (_, response) = try result.get()
                  guard (200 ..< 300).contains(response.statusCode) else {
@@ -46,7 +184,7 @@ index 7c04190..54c9931 100644
                  }
                  
                  verificationHandler(responseHandler)
-@@ -406,89 +410,119 @@ private extension ALTAppleAPI
+@@ -406,89 +431,119 @@ private extension ALTAppleAPI
                                   verificationHandler: @escaping (@escaping (String?) -> Void) -> Void,
                                   completionHandler: @escaping (Result<Void, Error>) -> Void)
      {
@@ -235,7 +373,7 @@ index 7c04190..54c9931 100644
      func fetchAccount(session: ALTAppleAPISession, completionHandler: @escaping (Result<ALTAccount, Error>) -> Void)
      {
          let url = URL(string: "viewDeveloper.action", relativeTo: self.baseURL)!
-@@ -518,11 +552,44 @@ private extension ALTAppleAPI
+@@ -518,11 +573,44 @@ private extension ALTAppleAPI
  
  private extension ALTAppleAPI
  {
@@ -280,7 +418,7 @@ index 7c04190..54c9931 100644
          // Create a new session, and limit the maximum connections to just one at a time.
          // Otherwise, Apple's servers may reject connections with more than 2 requests.
          let configuration = URLSessionConfiguration.ephemeral
-@@ -536,11 +603,7 @@ private extension ALTAppleAPI
+@@ -536,11 +624,7 @@ private extension ALTAppleAPI
              {
                  guard let data = data, let httpResponse = response as? HTTPURLResponse else { throw error ?? ALTAppleAPIError.unknown() }
                  
@@ -293,7 +431,7 @@ index 7c04190..54c9931 100644
                  
                  completionHandler(.success((data, httpResponse)))
              }
-@@ -587,7 +650,11 @@ private extension ALTAppleAPI
+@@ -587,7 +671,11 @@ private extension ALTAppleAPI
                      let (data, httpResponse) = try result.get()
                      
                      // GSA answers rejected clients with an HTML error page (e.g. 503), which would otherwise surface as a plist parsing error.
@@ -567,5 +705,133 @@ index 0000000..fb62333
 +        received.removeAll()
 +        keepAlive = nil
 +        callback(result)
++    }
++}
+diff --git a/AltSign/Sources/AuthenticationSessionReuse.swift b/AltSign/Sources/AuthenticationSessionReuse.swift
+new file mode 100644
+index 0000000..0f849a9
+--- /dev/null
++++ b/AltSign/Sources/AuthenticationSessionReuse.swift
+@@ -0,0 +1,122 @@
++import Foundation
++
++public struct AuthenticationSessionScope: Codable, Equatable {
++    public let account: String
++    public let deviceID: String
++    public let clientInfo: String
++    public init(account: String, deviceID: String, clientInfo: String) {
++        self.account = account.lowercased()
++        self.deviceID = deviceID
++        self.clientInfo = clientInfo
++    }
++}
++
++// Only the local, non-synchronizing keychain stores this record. Never store anisette OTPs.
++public struct AuthenticationSessionCredential: Codable, CustomStringConvertible, CustomDebugStringConvertible {
++    public let schema: Int
++    public let scope: AuthenticationSessionScope
++    public let dsid: String
++    public let token: String
++    public let issuedAt: Date
++    public let expiresAt: Date
++    public var description: String { "<AuthenticationSessionCredential: redacted>" }
++    public var debugDescription: String { description }
++
++    public init(scope: AuthenticationSessionScope, dsid: String, token: String, issuedAt: Date, serverExpiry: Date?) {
++        self.schema = 1
++        self.scope = scope
++        self.dsid = dsid
++        self.token = token
++        self.issuedAt = issuedAt
++        // Respect Apple's expiry, cap local retention at seven days; absent expiry gets 15 minutes.
++        self.expiresAt = min(serverExpiry ?? issuedAt.addingTimeInterval(900), issuedAt.addingTimeInterval(7 * 86400))
++    }
++    public func isUsable(for scope: AuthenticationSessionScope, now: Date) -> Bool {
++        schema == 1 && self.scope == scope && !scope.account.isEmpty && !scope.deviceID.isEmpty &&
++        !scope.clientInfo.isEmpty && !dsid.isEmpty && !token.isEmpty &&
++        issuedAt.timeIntervalSince1970.isFinite && expiresAt.timeIntervalSince1970.isFinite &&
++        issuedAt <= now.addingTimeInterval(5) && expiresAt > now.addingTimeInterval(60) &&
++        expiresAt <= issuedAt.addingTimeInterval(7 * 86400)
++    }
++}
++
++// Serializes authentication decisions across independent Refresh groups. A queued request reads
++// the credential saved by the previous one, then validates it using its own fresh anisette data.
++// No successful result is returned until Apple validates the token or a real login succeeds.
++public final class AuthenticationSessionCoordinator<Value> {
++    private let queue = DispatchQueue(label: "AltSign.AuthenticationSessionReuse")
++    private var pending: [() -> Void] = []
++    private var running = false
++
++    public init() {}
++
++    public func resolve(scope: AuthenticationSessionScope, allowsCachedSession: Bool,
++                        now: @escaping () -> Date = Date.init,
++                        load: @escaping () -> Data?, persist: @escaping (Data?) -> Bool,
++                        isCurrent: @escaping () -> Bool,
++                        isInvalidSession: @escaping (Error) -> Bool,
++                        validate: @escaping (AuthenticationSessionCredential, @escaping (Result<Value, Error>) -> Void) -> Void,
++                        login: @escaping (@escaping (Result<Value, Error>) -> Void) -> Void,
++                        credential: @escaping (Value) -> AuthenticationSessionCredential,
++                        completion: @escaping (Result<Value, Error>) -> Void) {
++        queue.async {
++            self.pending.append {
++                // Every state transition and completion gate is owned by this serial queue.
++                var phase = "starting"
++                func finish(_ result: Result<Value, Error>) {
++                    guard phase != "finished" else { return }
++                    phase = "finished"
++                    self.running = false
++                    completion(isCurrent() ? result : .failure(CancellationError()))
++                    self.startNext()
++                }
++                func performLogin() {
++                    guard isCurrent() else { return finish(.failure(CancellationError())) }
++                    phase = "login"
++                    login { result in
++                        self.queue.async {
++                            guard phase == "login" else { return }
++                            guard isCurrent() else { return finish(.failure(CancellationError())) }
++                            if case .success(let value) = result {
++                                let record = credential(value)
++                                let data = record.isUsable(for: scope, now: now()) ? try? JSONEncoder().encode(record) : nil
++                                guard persist(data) else { return finish(.failure(CancellationError())) }
++                            }
++                            finish(result)
++                        }
++                    }
++                }
++                guard isCurrent() else { return finish(.failure(CancellationError())) }
++                guard allowsCachedSession, let data = load() else { return performLogin() }
++                guard data.count <= 65536,
++                      let saved = try? JSONDecoder().decode(AuthenticationSessionCredential.self, from: data),
++                      saved.isUsable(for: scope, now: now()) else {
++                    guard persist(nil) else { return finish(.failure(CancellationError())) }
++                    return performLogin()
++                }
++                phase = "validation"
++                validate(saved) { result in
++                    self.queue.async {
++                        guard phase == "validation" else { return }
++                        guard isCurrent() else { return finish(.failure(CancellationError())) }
++                        switch result {
++                        case .success: finish(result)
++                        case .failure(let error) where isInvalidSession(error):
++                            // Exactly one new login after an explicit expired/unauthorized session.
++                            guard persist(nil) else { return finish(.failure(CancellationError())) }
++                            performLogin()
++                        case .failure: finish(result) // 503/offline/permissions do not trigger password login.
++                        }
++                    }
++                }
++            }
++            self.startNext()
++        }
++    }
++
++    private func startNext() {
++        guard !running, !pending.isEmpty else { return }
++        running = true
++        pending.removeFirst()()
 +    }
 +}

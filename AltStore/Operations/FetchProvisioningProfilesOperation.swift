@@ -19,6 +19,16 @@ class FetchProvisioningProfilesOperation: ResultOperation<[String: ALTProvisioni
     let context: AppOperationContext
     
     var additionalEntitlements: [ALTEntitlement: Any]?
+
+    override func finish(_ result: Result<[String: ALTProvisioningProfile], Error>)
+    {
+        if case .failure(let error) = result, ALTAppleAPI.isAuthenticationSessionInvalid(error)
+        {
+            // Invalidate for the next operation; never replay provisioning mutations automatically.
+            Keychain.shared.invalidateAuthenticationSession()
+        }
+        super.finish(result)
+    }
     
     private let appGroupsLock = NSLock()
     
@@ -61,6 +71,7 @@ class FetchProvisioningProfilesOperation: ResultOperation<[String: ALTProvisioni
                 
                 var profiles = [app.bundleIdentifier: profile]
                 var error: Error?
+                let profilesLock = NSLock()
                 
                 let dispatchGroup = DispatchGroup()
                 
@@ -69,15 +80,15 @@ class FetchProvisioningProfilesOperation: ResultOperation<[String: ALTProvisioni
                     dispatchGroup.enter()
                     
                     self.prepareProvisioningProfile(for: appExtension, parentApp: app, resignedParentBundleID: profile.bundleIdentifier, team: team, session: session) { (result) in
+                        profilesLock.lock()
                         switch result
                         {
-                        case .failure(let e): error = e
+                        case .failure(let e): if error == nil { error = e }
                         case .success(let profile): profiles[appExtension.bundleIdentifier] = profile
                         }
-                        
-                        dispatchGroup.leave()
-                        
                         self.progress.completedUnitCount += 1
+                        profilesLock.unlock()
+                        dispatchGroup.leave()
                     }
                 }
                 

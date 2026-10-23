@@ -51,6 +51,39 @@ public class Keychain
     
     fileprivate let keychain = KeychainAccess.Keychain(service: "com.rileytestut.AltStore").accessibility(.afterFirstUnlock).synchronizable(true)
     fileprivate let localKeychain = KeychainAccess.Keychain(service: "com.rileytestut.AltStore.Local").accessibility(.afterFirstUnlock).synchronizable(false)
+
+    // Developer tokens stay on this device and are never synchronized through iCloud.
+    private let authenticationKeychain = KeychainAccess.Keychain(service: "com.rileytestut.AltStore.DeveloperSession").accessibility(.afterFirstUnlockThisDeviceOnly).synchronizable(false)
+    private let authenticationSessionLock = NSLock()
+    private var authenticationRevision: UInt64 = 0
+
+    public func authenticationSessionRevision() -> UInt64 {
+        authenticationSessionLock.lock()
+        defer { authenticationSessionLock.unlock() }
+        return authenticationRevision
+    }
+
+    public func cachedAuthenticationSession() -> Data? {
+        authenticationSessionLock.lock()
+        defer { authenticationSessionLock.unlock() }
+        return try? authenticationKeychain.getData("session")
+    }
+
+    @discardableResult
+    public func storeAuthenticationSession(_ data: Data?, revision: UInt64) -> Bool {
+        authenticationSessionLock.lock()
+        defer { authenticationSessionLock.unlock() }
+        guard authenticationRevision == revision else { return false }
+        authenticationKeychain[data: "session"] = data
+        return true
+    }
+
+    public func invalidateAuthenticationSession() {
+        authenticationSessionLock.lock()
+        defer { authenticationSessionLock.unlock() }
+        authenticationRevision &+= 1
+        authenticationKeychain[data: "session"] = nil
+    }
     
     @KeychainItem(key: "appleIDEmailAddress")
     public var appleIDEmailAddress: String?
@@ -100,6 +133,7 @@ public class Keychain
     
     public func reset()
     {
+        self.invalidateAuthenticationSession()
         self.appleIDEmailAddress = nil
         self.appleIDPassword = nil
         self.signingCertificatePrivateKey = nil

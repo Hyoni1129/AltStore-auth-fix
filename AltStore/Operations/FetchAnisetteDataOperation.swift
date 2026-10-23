@@ -50,6 +50,7 @@ class FetchAnisetteDataOperation: ResultOperation<ALTAnisetteData>, @unchecked S
 
     // Set to Apple's X-Apple-I-MD-DATA to resynchronize the existing anisette data instead of fetching it normally.
     var resynchronizationData: String?
+    var authenticationAPI: ALTAppleAPI = .shared
 
     private let session: URLSession
     
@@ -285,7 +286,7 @@ private extension FetchAnisetteDataOperation
         let (machineID, oneTimePassword, routingInfo) = try await self.fetchHeaders(from: serverURL, identity: identity, adiPB: adiPB, sim: sim)
 
         // GrandSlam must use the same client identity as provisioning, including after 2FA refreshes.
-        ALTAppleAPI.shared.authenticationUserAgent = response.userAgent
+        self.authenticationAPI.authenticationUserAgent = response.userAgent
 
         // 4. Construct & return ALTAnisetteData
         return ALTAnisetteData(
