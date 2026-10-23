@@ -12,4 +12,6 @@ The offline regression harness compiles the actual changed Swift functions again
 
 This is a source correction and test build. Real Apple SMS validation and subsequent app refresh must still be verified on the device after installation. The user's installation-integrity issue was resolved by switching the signing Apple account; this revision does not claim that changing the authentication code repairs certificate/profile rejection.
 
+Mac run [39896930226](https://github.com/Hyoni1129/AltStore-auth-fix/actions/runs/39896930226), source `5d7f2c7`, passed all **69** offline assertions and built the iPhone Release IPA successfully. The downloaded artifact matched its SHA-256. Local packaging verification confirmed build 6902, ARM64, seven patched-code markers, matching widget version, valid ZIP CRCs, zero symlinks, and absence of the obsolete SMS-failed/trusted-device instructions in the authentication binary. Local device preparation changed only the main app Info.plist and preserved all compiled code.
+
 Reference implementation: https://github.com/nab138/isideload/blob/main/isideload/src/auth/apple_account.rs

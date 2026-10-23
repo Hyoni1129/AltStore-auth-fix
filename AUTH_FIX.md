@@ -1,5 +1,9 @@
 # Authentication test build
 
+Current revision: build 6902. See [SMS_FIX_V2.md](SMS_FIX_V2.md) for the SMS/trusted-device separation correction prompted by the installed-device test. The earlier build's automatic SMS-to-trusted-device fallback has been removed.
+
+Build 6902 completed in [Mac run 39896930226](https://github.com/Hyoni1129/AltStore-auth-fix/actions/runs/39896930226), source `5d7f2c7`, with all **69** offline regression assertions passing. The IPA was downloaded, checksum-verified, and prepared locally. Real SMS login and app Refresh remain to be confirmed on the installed v2.
+
 This is a local experimental patch of AltStore Classic, not an official release or a verified fix.
 Upstream: `altstoreio/AltStore`, classic commit `bbc10d6964185b75a46c6ddd7476ac08df095308`.
 AltSign base: `e639bdfbea185d5c229b11f62e25c5d78649d5c4`.
@@ -8,8 +12,8 @@ AltSign base: `e639bdfbea185d5c229b11f62e25c5d78649d5c4`.
 
 - Forward the remote anisette provider's User-Agent to Apple authentication requests; reject empty or newline-containing client metadata.
 - Connect AltSign's existing fresh-anisette callback to the mobile operation queue. Code validation, the second sign-in, and token retrieval can obtain fresh data without recreating the provisioned identity.
-- On SMS delivery HTTP 403/415 only, try the trusted-device path once. If that delivery request also returns 403/415, allow a current trusted-device code to be supplied manually. A successful Apple code validation is still required. HTTP 429/503 and network errors do not trigger a retry loop or a manual-code bypass.
-- Refresh anisette before SMS code validation. Preserve HTTP failures during validation instead of presenting every failure as an incorrect code. Read the PE-token header without depending on its letter case.
+- Keep SMS and trusted-device codes on their respective verification endpoints. SMS uses the JSON API; an ambiguous delivery HTTP 403/415 can prompt for an already-received SMS code without requesting a different kind of code or sending another text.
+- Refresh anisette before SMS send and validation. Preserve HTTP failures and structured incorrect-code responses. JSON SMS validation does not require the XML endpoint's PE-token header.
 - Log only allowlisted authentication stages and numeric HTTP status. Do not print response bodies, headers, account identifiers, passwords, codes, or tokens.
 
 These address concrete source-level integration gaps and the observed SMS failure path. They do not guarantee that Apple will accept every client/account/server combination or that -80046 is fixed.
@@ -27,7 +31,7 @@ The build applies `Patches/AltSign-auth-fix.patch` to the pinned AltSign submodu
 
 The CI workflow uses a standard GitHub-hosted macOS runner with read-only repository permissions. It does not require an Apple account, certificate, provisioning profile, pairing file, or device identifier. Account authentication and signing must happen locally after downloading the artifact.
 
-The offline harness checks SMS success, case-insensitive PE-token headers, fresh anisette after code entry, 403/415 fallback, manual-code validation, incorrect codes, cancellation, refresh failure, 401/429/500/503 propagation, bounded request counts, preservation of already-delivered codes, and diagnostic label allowlisting. It uses a fake transport; no network transport exists in the harness. It is not an end-to-end Apple authentication test.
+The offline harness checks SMS success, channel-specific endpoints, JSON headers/body, fresh anisette before send and validation, 403/415 conditional SMS entry, structured active challenges, incorrect codes, cancellation, refresh failure, 401/429/500/503 propagation, bounded request counts, preservation of already-delivered trusted-device codes, and diagnostic label allowlisting. It uses a fake transport; no network transport exists in the harness. It is not an end-to-end Apple authentication test.
 
 ## Device acceptance
 
