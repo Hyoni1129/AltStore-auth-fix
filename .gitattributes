@@ -1,0 +1,2 @@
+/Scripts/*.sh text eol=lf
+/Patches/*.patch text eol=lf -whitespace
