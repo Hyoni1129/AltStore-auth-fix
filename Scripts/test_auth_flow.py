@@ -34,16 +34,19 @@ struct Reply {
     let status: Int
     var headers: [String: String] = [:]
     var body: [String: Any] = ["ec": 0]
+    var json: Bool = false
 }
 final class ALTAppleAPI {
     var twoFactorAuthenticationHint: String?
+    var twoFactorAuthenticationTitle: String?
     var replies: [Reply] = []
     var requests: [URLRequest] = []
     var refreshCount = 0
     var failRefresh = false
+    var failRefreshAt: Int?
     func refreshAnisetteData(_ old: ALTAnisetteData, completionHandler: @escaping (Result<ALTAnisetteData, Error>) -> Void) {
         refreshCount += 1
-        if failRefresh { return completionHandler(.failure(ALTAppleAPIError(.unknown))) }
+        if failRefresh || failRefreshAt == refreshCount { return completionHandler(.failure(ALTAppleAPIError(.unknown))) }
         completionHandler(.success(ALTAnisetteData(generation: old.generation + 1)))
     }
     func makeTwoFactorCodeRequest(url: URL, dsid: String, idmsToken: String, anisetteData: ALTAnisetteData) -> URLRequest {
@@ -55,7 +58,9 @@ final class ALTAppleAPI {
         requests.append(request)
         precondition(!replies.isEmpty, "Unexpected extra HTTP request; no real network transport exists")
         let reply = replies.removeFirst()
-        let data = try! PropertyListSerialization.data(fromPropertyList: reply.body, format: .xml, options: 0)
+        let data: Data
+        if reply.json { data = try! JSONSerialization.data(withJSONObject: reply.body) }
+        else { data = try! PropertyListSerialization.data(fromPropertyList: reply.body, format: .xml, options: 0) }
         let response = HTTPURLResponse(url: request.url!, statusCode: reply.status, httpVersion: "HTTP/1.1", headerFields: reply.headers)!
         completionHandler(.success((data, response)))
     }
@@ -68,8 +73,7 @@ checks = r'''
 
 var passed = 0
 func check(_ condition: @autoclosure () -> Bool, _ description: String) {
-    precondition(condition(), description)
-    passed += 1
+    precondition(condition(), description); passed += 1
 }
 func sms(_ api: ALTAppleAPI, code: String? = "123456") -> (prompts: Int, completions: Int, result: Result<Void, Error>?) {
     var prompts = 0, completions = 0
@@ -80,93 +84,128 @@ func sms(_ api: ALTAppleAPI, code: String? = "123456") -> (prompts: Int, complet
     return (prompts, completions, result)
 }
 func status(_ result: Result<Void, Error>?) -> Int? {
-    if case .failure(let error) = result { return (error as? ALTAppleAPIError)?.status }
-    return nil
+    if case .failure(let error) = result { return (error as? ALTAppleAPIError)?.status }; return nil
 }
 func succeeded(_ result: Result<Void, Error>?) -> Bool {
     if case .success = result { return true }; return false
 }
+func incorrect(_ result: Result<Void, Error>?) -> Bool {
+    if case .failure(let error) = result, let error = error as? ALTAppleAPIError,
+       case .incorrectVerificationCode = error.code { return true }; return false
+}
+func jsonBody(_ request: URLRequest) -> [String: Any] {
+    return try! JSONSerialization.jsonObject(with: request.httpBody!) as! [String: Any]
+}
 
-// Normal SMS delivery still validates with a fresh one-time password.
+// The code received by SMS must always go to the SMS JSON validation endpoint.
+for delivery in [200, 403, 415] {
+    let api = ALTAppleAPI()
+    api.replies = [Reply(status: delivery), Reply(status: 204)]
+    let result = sms(api)
+    check(succeeded(result.result), "SMS code validates even when delivery returned an ambiguous error")
+    check(result.prompts == 1 && result.completions == 1, "One prompt and completion")
+    check(api.requests.map { $0.url!.path } == ["/auth/verify/phone", "/auth/verify/phone/securitycode"], "No trusted-device switch or replacement SMS")
+    check(api.requests.map { $0.httpMethod! } == ["PUT", "POST"], "SMS methods match the JSON API")
+    check(api.requests.allSatisfy { $0.value(forHTTPHeaderField: "Content-Type") == "application/json" && $0.value(forHTTPHeaderField: "Accept") == "application/json" }, "SMS headers match the body")
+    check(api.refreshCount == 2 && api.requests.last?.value(forHTTPHeaderField: "X-Test-Generation") == "2", "Both SMS requests use fresh anisette")
+    let body = jsonBody(api.requests.last!)
+    check((body["securityCode"] as? [String: String])?["code"] == "123456" && body["mode"] as? String == "sms", "Code remains in the SMS schema")
+    check((body["phoneNumber"] as? [String: Int])?["id"] == 1, "Selected phone number is preserved")
+    check(api.twoFactorAuthenticationTitle?.contains("SMS") == true, "Prompt identifies the actual code type")
+    check(api.twoFactorAuthenticationHint?.contains("trusted") == false && api.twoFactorAuthenticationHint?.contains("delivery failed") == false, "No false failed-delivery/trusted-device instructions")
+}
+
+// A 412 is an active SMS challenge only when its complete structured data matches.
+let challenge: [String: Any] = [
+    "mode": "sms", "type": "verification", "authenticationType": "hsa2",
+    "trustedPhoneNumber": ["id": 1], "trustedPhoneNumbers": [["id": 1]],
+    "securityCode": ["length": 6, "tooManyCodesSent": false, "tooManyCodesValidated": false,
+                     "securityCodeLocked": false, "securityCodeCooldown": false]
+]
 do {
-    let api = ALTAppleAPI()
-    api.replies = [Reply(status: 200), Reply(status: 200, headers: ["x-apple-pe-token": "fake"])]
+    let api = ALTAppleAPI(); api.replies = [Reply(status: 412, body: challenge, json: true), Reply(status: 200)]
     let result = sms(api)
-    check(succeeded(result.result), "SMS success and case-insensitive PE-token header")
-    check(result.prompts == 1 && result.completions == 1, "SMS callbacks occur once")
-    check(api.requests.count == 2 && api.refreshCount == 1, "SMS validates once with fresh data")
-    check(api.requests.last?.value(forHTTPHeaderField: "X-Test-Generation") == "1", "Old anisette is not used after typing a code")
+    check(succeeded(result.result) && result.prompts == 1 && api.requests.count == 2, "Active SMS challenge validates without a second send")
 }
-// Both observed SMS rejection statuses may use a real trusted-device code.
-for rejection in [403, 415] {
-    let api = ALTAppleAPI()
-    api.replies = [Reply(status: rejection), Reply(status: 200), Reply(status: 200)]
+for field in ["tooManyCodesSent", "tooManyCodesValidated", "securityCodeLocked", "securityCodeCooldown", "length"] {
+    var invalid = challenge
+    var flags = invalid["securityCode"] as! [String: Any]
+    if field == "length" { flags[field] = 8 }
+    else { flags[field] = true }
+    invalid["securityCode"] = flags
+    let api = ALTAppleAPI(); api.replies = [Reply(status: 412, body: invalid, json: true)]
     let result = sms(api)
-    check(succeeded(result.result), "SMS rejection falls back to trusted-device validation")
-    check(result.prompts == 1 && result.completions == 1, "Fallback callbacks occur once")
-    check(api.requests.map { $0.url!.path } == ["/auth/verify/phone/put", "/auth/verify/trusteddevice", "/grandslam/GsService2/validate"], "Fallback uses the trusted-device validation endpoint")
-    check(api.refreshCount == 2 && api.requests.last?.value(forHTTPHeaderField: "X-Test-Generation") == "2", "Both fallback stages refresh anisette")
+    check(!succeeded(result.result) && result.prompts == 0 && api.requests.count == 1, "Locked, limited or malformed challenge is rejected")
 }
-// When delivery itself is rejected, a manually supplied code is still checked by Apple.
 do {
-    let api = ALTAppleAPI()
-    api.replies = [Reply(status: 415), Reply(status: 403), Reply(status: 200)]
+    var invalid = challenge; invalid["trustedPhoneNumber"] = ["id": 2]
+    let api = ALTAppleAPI(); api.replies = [Reply(status: 412, body: invalid, json: true)]
     let result = sms(api)
-    check(succeeded(result.result), "Manual trusted-device code may validate")
-    check(result.prompts == 1 && result.completions == 1 && api.twoFactorAuthenticationHint != nil, "Manual-code instructions are shown once")
+    check(!succeeded(result.result) && result.prompts == 0, "A challenge for a different phone is rejected")
 }
-// Never treat an outage or throttling response as success, and never retry it in a loop.
-for failure in [401, 429, 500, 503] {
+for serviceCode in ["-22979", "-22981"] {
+    let api = ALTAppleAPI()
+    api.replies = [Reply(status: 403, body: ["serviceErrors": [["code": serviceCode]]], json: true), Reply(status: 200)]
+    let result = sms(api)
+    check(succeeded(result.result) && api.requests.count == 2, "A last SMS code may validate when sending a replacement is limited")
+}
+for failure in [400, 401, 429, 500, 503] {
     let api = ALTAppleAPI(); api.replies = [Reply(status: failure)]
     let result = sms(api)
-    check(status(result.result) == failure, "SMS request preserves the HTTP failure")
-    check(result.prompts == 0 && result.completions == 1 && api.requests.count == 1, "No prompt or retry after SMS transport failure")
+    check(status(result.result) == failure, "Request HTTP failure preserved")
+    check(result.prompts == 0 && result.completions == 1 && api.requests.count == 1, "No extra request on transport failure")
 }
 do {
-    let api = ALTAppleAPI(); api.replies = [Reply(status: 415), Reply(status: 503)]
+    let api = ALTAppleAPI(); api.replies = [Reply(status: 403, body: ["serviceErrors": [["code": "-28248"]]], json: true)]
     let result = sms(api)
-    check(status(result.result) == 503 && result.prompts == 0 && api.requests.count == 2, "Fallback outage stops without manual-code bypass")
+    check(!succeeded(result.result) && result.prompts == 0, "A terminal service error is not an active SMS challenge")
+}
+do {
+    let api = ALTAppleAPI(); api.replies = [Reply(status: 200), Reply(status: 400, body: ["serviceErrors": [["code": "-21669"]]], json: true)]
+    let result = sms(api)
+    check(incorrect(result.result) && result.completions == 1, "Only Apple's incorrect-code response is reported as incorrect code")
 }
 do {
     let api = ALTAppleAPI(); api.replies = [Reply(status: 200), Reply(status: 503)]
     let result = sms(api)
-    check(status(result.result) == 503, "Validation 503 is not reported as incorrect verification code")
+    check(status(result.result) == 503 && !incorrect(result.result), "Validation outage is not an incorrect code")
 }
 do {
-    let api = ALTAppleAPI(); api.replies = [Reply(status: 200)]
+    let api = ALTAppleAPI(); api.replies = [Reply(status: 200), Reply(status: 200, body: ["serviceErrors": [["code": "-21669"]]], json: true)]
+    check(!succeeded(sms(api).result), "Semantic errors cannot pass because HTTP was 200")
+}
+for delivery in [200, 415] {
+    let api = ALTAppleAPI(); api.replies = [Reply(status: delivery)]
     let result = sms(api, code: nil)
-    check(!succeeded(result.result) && result.completions == 1 && api.requests.count == 1, "Cancel sends no validation request")
+    check(!succeeded(result.result) && result.completions == 1 && api.requests.count == 1, "Cancel sends no validation or trusted-device request")
 }
-do {
-    let api = ALTAppleAPI(); api.failRefresh = true; api.replies = [Reply(status: 200)]
+for failAt in [1, 2] {
+    let api = ALTAppleAPI(); api.failRefreshAt = failAt; api.replies = [Reply(status: 200)]
     let result = sms(api)
-    check(!succeeded(result.result) && result.completions == 1 && api.requests.count == 1, "Refresh failure does not reuse stale data")
+    check(!succeeded(result.result) && api.requests.count == failAt - 1, "Fresh-data failure never reuses stale headers")
 }
-do {
+// Genuine trusted-device codes retain their distinct path and never become SMS codes.
+for alreadySent in [false, true] {
     let api = ALTAppleAPI()
-    api.replies = [Reply(status: 415), Reply(status: 200), Reply(status: 200, body: ["ec": -21669])]
-    let result = sms(api)
-    check(!succeeded(result.result) && result.completions == 1, "Fallback does not accept an incorrect code")
+    api.replies = alreadySent ? [Reply(status: 200)] : [Reply(status: 200), Reply(status: 200)]
+    var outcome: Result<Void, Error>?
+    api.requestTrustedDeviceTwoFactorCode(dsid: "fake", idmsToken: "fake", anisetteData: ALTAnisetteData(generation: 0), isCodeAlreadySent: alreadySent, verificationHandler: { $0("123456") }, completionHandler: { outcome = $0 })
+    check(succeeded(outcome), "Trusted-device authentication still validates")
+    check(api.requests.last!.url!.path == "/grandslam/GsService2/validate", "Trusted-device code uses its own endpoint")
+    check(api.requests.count == (alreadySent ? 1 : 2), "Already-delivered code is not requested again")
+    check(api.twoFactorAuthenticationTitle?.contains("trusted") == true && api.twoFactorAuthenticationHint == nil, "Trusted-device prompt has no stale SMS error")
 }
-// Apple's already-delivered code must not be invalidated by requesting a replacement.
-do {
-    let api = ALTAppleAPI(); api.replies = [Reply(status: 200)]
-    var completions = 0
-    api.requestTrustedDeviceTwoFactorCode(dsid: "fake", idmsToken: "fake", anisetteData: ALTAnisetteData(generation: 0), isCodeAlreadySent: true, verificationHandler: { $0("123456") }, completionHandler: { _ in completions += 1 })
-    check(completions == 1 && api.requests.count == 1 && api.requests[0].url!.path == "/grandslam/GsService2/validate", "Already-sent code is only validated, not re-requested")
-}
-// Diagnostics are restricted to an allowlist; arbitrary body values cannot become log labels.
+// Log labels are restricted to operations, never arbitrary response/request values.
 do {
     let api = ALTAppleAPI()
     var request = URLRequest(url: URL(string: "https://gsa.apple.com/grandslam/GsService2")!)
-    for operation in ["init", "complete", "apptokens"] {
-        request.httpBody = try! PropertyListSerialization.data(fromPropertyList: ["Request": ["o": operation, "token": "never-log-this"]], format: .xml, options: 0)
-        check(api.authenticationStage(for: request) == operation, "Known operation is classified")
+    for operation in ["init", "complete", "apptokens", "never-log-this"] {
+        request.httpBody = try! PropertyListSerialization.data(fromPropertyList: ["Request": ["o": operation]], format: .xml, options: 0)
+        check(api.authenticationStage(for: request) == (operation == "never-log-this" ? "sign-in" : operation), "Diagnostic operation allowlist")
     }
-    request.httpBody = try! PropertyListSerialization.data(fromPropertyList: ["Request": ["o": "never-log-this"]], format: .xml, options: 0)
-    check(api.authenticationStage(for: request) == "sign-in", "Unknown operation cannot leak into diagnostics")
 }
 print("PASS: \(passed) offline authentication regression assertions; no network requests")
+
 '''
 
 with tempfile.TemporaryDirectory(prefix="altstore-auth-tests-") as directory:

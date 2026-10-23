@@ -388,6 +388,7 @@ private extension AuthenticationOperation
 
         ALTAppleAPI.shared.authenticationUserAgent = nil
         ALTAppleAPI.shared.twoFactorAuthenticationHint = nil
+        ALTAppleAPI.shared.twoFactorAuthenticationTitle = nil
         ALTAppleAPI.shared.anisetteDataRefreshHandler = { [weak self] completionHandler in
             guard let self else { return completionHandler(nil, OperationError.unknown()) }
 
@@ -432,11 +433,13 @@ private extension AuthenticationOperation
                 {
                     verificationHandler = { (completionHandler) in
                         DispatchQueue.main.async {
-                            let alertController = UIAlertController(title: NSLocalizedString("Please enter the 6-digit verification code that was sent to your Apple devices.", comment: ""), message: ALTAppleAPI.shared.twoFactorAuthenticationHint, preferredStyle: .alert)
+                            let title = ALTAppleAPI.shared.twoFactorAuthenticationTitle ?? NSLocalizedString("Please enter the 6-digit verification code that was sent to your Apple devices.", comment: "")
+                            let alertController = UIAlertController(title: title, message: ALTAppleAPI.shared.twoFactorAuthenticationHint, preferredStyle: .alert)
                             alertController.addTextField { (textField) in
                                 textField.autocorrectionType = .no
                                 textField.autocapitalizationType = .none
                                 textField.keyboardType = .numberPad
+                                textField.textContentType = .oneTimeCode
                                 
                                 NotificationCenter.default.addObserver(self, selector: #selector(AuthenticationOperation.textFieldTextDidChange(_:)), name: UITextField.textDidChangeNotification, object: textField)
                             }
