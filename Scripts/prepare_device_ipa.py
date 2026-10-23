@@ -29,10 +29,21 @@ with zipfile.ZipFile(args.source) as source:
         parser.error('This local preparation script is only for the AltStore test build')
     info['ALTDeviceID'] = args.udid
     info.pop('ALTServerID', None)
+    replacements = {infos[0]: plistlib.dumps(info, sort_keys=False)}
+    for name in source.namelist():
+        if re.fullmatch(r'Payload/[^/]+\.app/PlugIns/[^/]+\.appex/Info\.plist', name):
+            extension = plistlib.loads(source.read(name))
+            version_keys = ('CFBundleVersion', 'CFBundleShortVersionString')
+            if any(extension.get(key) != info.get(key) for key in version_keys):
+                for key in version_keys:
+                    extension[key] = info[key]
+                replacements[name] = plistlib.dumps(extension, sort_keys=False)
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, 'w') as output:
         for entry in source.infolist():
-            content = plistlib.dumps(info, sort_keys=False) if entry.filename == infos[0] else source.read(entry)
+            content = replacements.get(entry.filename)
+            if content is None:
+                content = source.read(entry)
             output.writestr(entry, content)
 args.destination.write_bytes(buffer.getvalue())
 print('Prepared local device IPA. Source preserved. Sign this copy locally before installation.')

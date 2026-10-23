@@ -41,7 +41,9 @@ The offline harness checks SMS success, case-insensitive PE-token headers, fresh
 
 Local patch/whitespace checks, reverse application of the nested AltSign patch, Python syntax, and workflow YAML validation have been checked. A third-party Swift grammar reports no explicit syntax error nodes in the changed files; it also has missing-node reports in the upstream originals, so this does not establish successful Swift compilation.
 
-The user approved publishing a test fork and building the installable IPA. The first Mac run passed all 32 offline Swift regression assertions. Xcode 26.6 then stopped on upstream corecrypto's int8 negation warning promoted to an error. The build command demotes only that diagnostic from error to warning; it does not change the cryptographic code. App compilation and device login/Refresh still need verification.
+The user approved publishing a test fork and building the installable IPA. Mac run [39893740393](https://github.com/Hyoni1129/AltStore-auth-fix/actions/runs/39893740393), source commit `eb33d57`, passed all 32 offline Swift regression assertions and completed the Xcode 26.6 iPhone Release build. The command demotes only upstream corecrypto's int8-negation diagnostic from error to warning; it does not change the cryptographic code.
+
+The IPA was downloaded with its matching SHA-256 and prepared for the device locally. Packaging verification confirmed ARM64, six patched-code markers in the application/AltStoreCore framework, ZIP CRC integrity, matching widget version, and zero symlinks. Local preparation changes only the app/widget Info.plist files. The device is disconnected, so installation, real Apple login, and Refresh remain unverified.
 
 ## References
 
